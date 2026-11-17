@@ -20,7 +20,6 @@ read_globals = {
     "UISpecialFrames",
     -- functions
     "CreateFrame",
-    "debugstack",
     "geterrorhandler",
     "GetCursorPosition",
     "GetLocale",

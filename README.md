@@ -40,10 +40,20 @@ TOC (before the addon's own files):
 Libs\lib-pardona\lib-pardona.xml
 ```
 
-`lib-pardona.xml` loads `LibStub\LibStub.lua` and then `LibPardona-1.0\LibPardona-1.0.lua`. The textures
-(`LibPardona-1.0\Textures\Pardona.tga`, `PardonaMinimap.tga`) are located at runtime relative to the copy
-that is actually running, so the library works from any folder name. If the path cannot be determined,
-the icon of the first registered addon is used instead.
+`lib-pardona.xml` loads `LibStub\LibStub.lua` and then `LibPardona-1.0\LibPardona-1.0.lua`.
+
+**Convention:** every Pardona addon embeds the library at exactly `Libs\lib-pardona` inside its own
+folder. The textures (`Pardona.tga`, `PardonaMinimap.tga`) are then addressed by convention as
+
+```
+Interface\AddOns\<info.addon>\Libs\lib-pardona\LibPardona-1.0\Textures\Pardona
+Interface\AddOns\<info.addon>\Libs\lib-pardona\LibPardona-1.0\Textures\PardonaMinimap
+```
+
+using the first registered addon that passes `info.addon`. If no registered addon passes `info.addon`,
+the icon of the first registered addon is used (or a question-mark icon if none is registered).
+Minimap button, overview emblem, compartment entry and LibDataBroker icon are updated after every
+registration, so an addon with `info.addon` that registers later still switches them to the emblem.
 
 ## API
 
@@ -73,6 +83,15 @@ local LP = LibStub("LibPardona-1.0")
 | `db` | table | required – a table inside the addon's SavedVariables; the library stores its fields there |
 | `status` | `function() -> string\|nil` | optional – short status for tooltip and overview |
 | `migrate` | `function(db)` | optional – one-time import of old settings (e.g. an old minimap position) |
+| `addon` | string | optional, **recommended for every addon** – the addon's folder name as in its TOC (e.g. `"PardonasToolTips"`, usually `local ADDON = ...`) |
+
+`info.addon` is used for two things:
+
+- **Version** in the overview: `C_AddOns.GetAddOnMetadata(info.addon, "Version")`. An unreplaced packager
+  token (a value starting with `@`, e.g. `@project-version@` in a development checkout) is shown as `dev`.
+  Without `info.addon` the version column shows `-`.
+- **Emblem textures**: see the embedding convention above. An addon without `info.addon` only gets the
+  Pardona emblem if another registered addon passes `info.addon`.
 
 The *Show minimap button* checkbox of the overview uses `SetMinimapHidden` internally, so e.g. an addon's
 slash command can simply call `LP:ToggleMinimap()`. Calls before `PLAYER_LOGIN` are kept: their `changed`
@@ -80,8 +99,7 @@ timestamp wins the login synchronization.
 
 All Settings calls are protected; without the Settings API the settings functions return `nil`.
 Subcategory functions return the existing category if the same `id` is registered twice.
-The addon version shown in the overview is read with `C_AddOns.GetAddOnMetadata` from the addon folder
-the `RegisterAddon` call comes from.
+The compartment entry is created at `PLAYER_LOGIN` (or immediately for registrations after login).
 
 ### Example
 
@@ -100,6 +118,7 @@ f:SetScript("OnEvent", function(self, _, name)
 
     LP:RegisterAddon("BuffReminder", {
         name = "Buff Reminder",
+        addon = ADDON, -- folder name, e.g. "PardonasBuffReminder"
         icon = "Interface\\AddOns\\PardonasBuffReminder\\Textures\\Icon",
         db = BuffReminderDB,
         onClick = function(button) LP:OpenSettings("BuffReminder") end,
@@ -143,6 +162,7 @@ db.minimap = { hide = false, angle = 225, changed = 0 }
 ## Development
 
 - `luacheck .` must report 0 warnings / 0 errors (`LibStub/` is the unmodified official file and excluded).
+  CI additionally compiles every own `.lua` file with `luac5.1 -p` (Lua 5.1 compiler limits).
 - Bump `MINOR` in `LibPardona-1.0.lua` with every behaviour change; a newer MINOR must keep working with
   state created by older copies.
 - Source artwork is in `media/` (not packaged).

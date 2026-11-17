@@ -4,7 +4,7 @@
 -- Embedded library (LibStub). The highest MINOR wins and takes over the existing state.
 -- License: MIT
 
-local MAJOR, MINOR = "LibPardona-1.0", 2
+local MAJOR, MINOR = "LibPardona-1.0", 3
 
 assert(LibStub, MAJOR .. " requires LibStub")
 local LP, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)
@@ -13,11 +13,14 @@ if not LP then return end
 ---------------------------------------------------------------------------
 -- Persistent state (kept across upgrades to a newer MINOR)
 ---------------------------------------------------------------------------
-LP.entries = LP.entries or {}             -- id -> { id, info, addon }
+LP.entries = LP.entries or {}             -- id -> { id, info, addon (= info.addon or nil) }
 LP.order = LP.order or {}                 -- ids in registration order
 LP.subcategories = LP.subcategories or {} -- id -> { category, layout }
 LP.frames = LP.frames or {}               -- events, minimap, menu, overview
--- LP.category, LP.compartmentRegistered, LP.ldbObject, LP.loggedIn, LP.synced, LP.texturePath
+-- LP.category, LP.compartmentRegistered, LP.compartmentData, LP.ldbObject, LP.loggedIn, LP.synced
+-- LP.texturePath of MINOR 1/2 was derived from debugstack, whose paths WoW shortens with "...";
+-- it is no longer used.
+LP.texturePath = nil
 
 ---------------------------------------------------------------------------
 -- Locale
@@ -120,19 +123,20 @@ local function SettingsAvailable()
 end
 
 ---------------------------------------------------------------------------
--- Texture path of this copy of the library
+-- Textures
 ---------------------------------------------------------------------------
-local function DetectTexturePath()
-    if type(debugstack) ~= "function" then return nil end
-    local ok, stack = pcall(debugstack, 1, 1, 0)
-    if not ok or type(stack) ~= "string" then return nil end
-    stack = stack:gsub("\\", "/")
-    local dir = stack:match("([Ii]nterface/[Aa][Dd][Dd][Oo][Nn][Ss]/.-)/LibPardona%-1%.0%.lua")
-    if not dir or dir:find("...", 1, true) then return nil end
-    return (dir:gsub("/", "\\")) .. "\\Textures\\"
+-- Convention: every Pardona addon embeds the library under Libs\lib-pardona, so the textures of
+-- the first registered addon that declares info.addon (its folder name) are used.
+local function TextureDir()
+    for _, id in ipairs(LP.order) do
+        local entry = LP.entries[id]
+        local addon = entry and entry.addon
+        if type(addon) == "string" and addon ~= "" then
+            return "Interface\\AddOns\\" .. addon .. "\\Libs\\lib-pardona\\LibPardona-1.0\\Textures\\"
+        end
+    end
+    return nil
 end
-
-LP.texturePath = DetectTexturePath() or LP.texturePath
 
 local function FirstIcon()
     local id = LP.order[1]
@@ -141,12 +145,14 @@ local function FirstIcon()
 end
 
 local function EmblemTexture()
-    if LP.texturePath then return LP.texturePath .. "Pardona" end
+    local dir = TextureDir()
+    if dir then return dir .. "Pardona" end
     return FirstIcon() or FALLBACK_ICON
 end
 
 local function MinimapTexture()
-    if LP.texturePath then return LP.texturePath .. "PardonaMinimap" end
+    local dir = TextureDir()
+    if dir then return dir .. "PardonaMinimap" end
     return FirstIcon() or FALLBACK_ICON
 end
 
@@ -165,11 +171,14 @@ local function GetStatus(entry)
     return status
 end
 
+-- nil without info.addon (shown as "-"); unreplaced packager tokens such as @project-version@ -> "dev"
 local function GetVersion(entry)
+    if type(entry.addon) ~= "string" or entry.addon == "" then return nil end
     if type(C_AddOns) ~= "table" or type(C_AddOns.GetAddOnMetadata) ~= "function" then return nil end
     local ok, version = pcall(C_AddOns.GetAddOnMetadata, entry.addon, "Version")
-    if ok and not IsSecret(version) and type(version) == "string" and version ~= "" then return version end
-    return nil
+    if not ok or IsSecret(version) or type(version) ~= "string" or version == "" then return nil end
+    if version:sub(1, 1) == "@" then return "dev" end
+    return version
 end
 
 local function CallOnClick(entry, button)
@@ -741,7 +750,7 @@ local function EnsureCompartment()
     if LP.compartmentRegistered then return end
     local compartment = AddonCompartmentFrame
     if type(compartment) ~= "table" or type(compartment.RegisterAddon) ~= "function" then return end
-    local ok = pcall(compartment.RegisterAddon, compartment, {
+    local data = {
         text = L.TITLE,
         icon = EmblemTexture(),
         notCheckable = true,
@@ -749,8 +758,12 @@ local function EnsureCompartment()
         func = function(...) LP:_CompartmentClick(...) end,
         funcOnEnter = function(...) LP:_CompartmentEnter(...) end,
         funcOnLeave = function(...) LP:_CompartmentLeave(...) end,
-    })
-    if ok then LP.compartmentRegistered = true end
+    }
+    local ok = pcall(compartment.RegisterAddon, compartment, data)
+    if ok then
+        LP.compartmentRegistered = true
+        LP.compartmentData = data
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -787,6 +800,19 @@ local function EnsureLDB()
 end
 
 ---------------------------------------------------------------------------
+-- Texture refresh of already created elements (an addon with info.addon may register later)
+---------------------------------------------------------------------------
+local function UpdateTextures()
+    local button = LP.frames.minimap
+    if button and button.lpIcon then button.lpIcon:SetTexture(MinimapTexture()) end
+    local overview = LP.frames.overview
+    local content = overview and overview.lpContent
+    if content and content.lpEmblem then content.lpEmblem:SetTexture(EmblemTexture()) end
+    if LP.ldbObject then LP.ldbObject.icon = MinimapTexture() end
+    if LP.compartmentData then LP.compartmentData.icon = EmblemTexture() end
+end
+
+---------------------------------------------------------------------------
 -- Public API
 ---------------------------------------------------------------------------
 function LP:RegisterAddon(id, info)
@@ -798,15 +824,7 @@ function LP:RegisterAddon(id, info)
     if type(info.db) ~= "table" then error(MAJOR .. ": info.db must be a table", 2) end
     if info.status ~= nil and type(info.status) ~= "function" then error(MAJOR .. ": info.status must be a function", 2) end
     if info.migrate ~= nil and type(info.migrate) ~= "function" then error(MAJOR .. ": info.migrate must be a function", 2) end
-
-    -- addon folder of the caller, used for C_AddOns.GetAddOnMetadata(..., "Version")
-    local addonName
-    if type(debugstack) == "function" then
-        local ok, stack = pcall(debugstack, 2, 1, 0)
-        if ok and type(stack) == "string" then
-            addonName = stack:gsub("\\", "/"):match("[Aa][Dd][Dd][Oo][Nn][Ss]/([^/]+)/")
-        end
-    end
+    if info.addon ~= nil and type(info.addon) ~= "string" then error(MAJOR .. ": info.addon must be a string", 2) end
 
     local entry = self.entries[id]
     if not entry then
@@ -815,16 +833,17 @@ function LP:RegisterAddon(id, info)
         table.insert(self.order, id)
     end
     entry.info = info
-    entry.addon = addonName or entry.addon or id
+    entry.addon = info.addon
 
     EnsureCategory()
     EnsureMinimapButton()
-    EnsureCompartment()
     if self.loggedIn then
+        EnsureCompartment()
         SyncAll()
         EnsureLDB()
         UpdateMinimapButton()
     end
+    UpdateTextures()
     self:RefreshStatus()
     return true
 end
@@ -905,6 +924,7 @@ local function OnLogin()
     EnsureMinimapButton()
     EnsureCompartment()
     EnsureLDB()
+    UpdateTextures()
     LP:RefreshStatus()
 end
 
@@ -930,11 +950,29 @@ end
 
 -- A newer MINOR takes over frames created by an older copy.
 if oldMinor then
+    -- MINOR 1/2 guessed entry.addon from debugstack (or fell back to the id); only info.addon counts now.
+    for _, id in ipairs(LP.order) do
+        local entry = LP.entries[id]
+        if entry and type(entry.info) == "table" then
+            entry.addon = type(entry.info.addon) == "string" and entry.info.addon or nil
+        end
+    end
+    -- MINOR 1/2 did not keep the compartment data table; find it so its icon can be updated.
+    if LP.compartmentRegistered and not LP.compartmentData and type(AddonCompartmentFrame) == "table" then
+        local registered = AddonCompartmentFrame.registeredAddons
+        if type(registered) == "table" then
+            for _, data in ipairs(registered) do
+                if type(data) == "table" and not IsSecret(data.text) and data.text == L.TITLE then
+                    LP.compartmentData = data
+                    break
+                end
+            end
+        end
+    end
     if LP.frames.menu then EnsureMenu() end
     if LP.frames.overview then EnsureOverview() end
     if #LP.order > 0 then EnsureMinimapButton() end
-    if LP.loggedIn then
-        EnsureLDB()
-        LP:RefreshStatus()
-    end
+    if LP.loggedIn then EnsureLDB() end
+    UpdateTextures()
+    if LP.loggedIn then LP:RefreshStatus() end
 end
