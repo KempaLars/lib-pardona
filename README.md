@@ -59,6 +59,9 @@ local LP = LibStub("LibPardona-1.0")
 | `LP:RegisterSettingsVertical(id, name)` | Vertical-layout subcategory via `Settings.RegisterVerticalLayoutSubcategory`; returns `category, layout`. |
 | `LP:OpenSettings(id)` | Opens the addon's subpage, or the overview when `id` is `nil`. Returns `true` if something was opened. |
 | `LP:RefreshStatus()` | Updates overview, minimap tooltip and broker text (call it when a status changes). |
+| `LP:SetMinimapHidden(hide)` | Hides (`true`) or shows (`false`) the shared minimap button. Writes `hide` into **all** registered dbs with `changed = time()` and updates button, overview checkbox and tooltip. Returns the new hidden state. |
+| `LP:IsMinimapHidden()` | `true` if the shared minimap button is hidden (current synchronized state; `false` while no addon is registered). |
+| `LP:ToggleMinimap()` | Shortcut for `LP:SetMinimapHidden(not LP:IsMinimapHidden())`; returns the new hidden state. |
 
 `info` fields:
 
@@ -70,6 +73,10 @@ local LP = LibStub("LibPardona-1.0")
 | `db` | table | required – a table inside the addon's SavedVariables; the library stores its fields there |
 | `status` | `function() -> string\|nil` | optional – short status for tooltip and overview |
 | `migrate` | `function(db)` | optional – one-time import of old settings (e.g. an old minimap position) |
+
+The *Show minimap button* checkbox of the overview uses `SetMinimapHidden` internally, so e.g. an addon's
+slash command can simply call `LP:ToggleMinimap()`. Calls before `PLAYER_LOGIN` are kept: their `changed`
+timestamp wins the login synchronization.
 
 All Settings calls are protected; without the Settings API the settings functions return `nil`.
 Subcategory functions return the existing category if the same `id` is registered twice.
@@ -121,7 +128,7 @@ db.minimap = { hide = false, angle = 225, changed = 0 }
 - On `PLAYER_LOGIN` (all addons loaded) `migrate(db)` is called for every db without `db.minimap`.
   A migrated record without `changed` gets `changed = 1`, so it beats untouched defaults but not real changes.
 - Then the record with the highest `changed` is copied into all registered dbs.
-- Every change (dragging, show/hide) is written to **all** registered dbs with `changed = time()`.
+- Every change (dragging, show/hide, `SetMinimapHidden`) is written to **all** registered dbs with `changed = time()`.
   Uninstalling one Pardona addon therefore never loses the shared position.
 - Addons registered after login (load-on-demand) are synchronized immediately.
 

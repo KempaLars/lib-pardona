@@ -4,7 +4,7 @@
 -- Embedded library (LibStub). The highest MINOR wins and takes over the existing state.
 -- License: MIT
 
-local MAJOR, MINOR = "LibPardona-1.0", 1
+local MAJOR, MINOR = "LibPardona-1.0", 2
 
 assert(LibStub, MAJOR .. " requires LibStub")
 local LP, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)
@@ -529,8 +529,7 @@ local function BuildOverviewContent(frame)
     label:SetPoint("LEFT", check, "RIGHT", 4, 0)
     label:SetText(L.SHOW_MINIMAP)
     check:SetScript("OnClick", function(self)
-        WriteMinimap("hide", not self:GetChecked())
-        LP:RefreshStatus()
+        LP:SetMinimapHidden(not self:GetChecked())
     end)
     content.lpMinimapCheck = check
 end
@@ -866,14 +865,34 @@ function LP:OpenSettings(id)
     return false
 end
 
+-- Writes hide into every registered db (changed = time()) and updates button, overview and tooltip.
+-- Returns the new hidden state.
+function LP:SetMinimapHidden(hide)
+    if IsSecret(hide) then error(MAJOR .. ": hide must not be a secret value", 2) end
+    hide = hide and true or false
+    WriteMinimap("hide", hide)
+    self:RefreshStatus()
+    return self:IsMinimapHidden()
+end
+
+function LP:IsMinimapHidden()
+    return MinimapState().hide == true
+end
+
+function LP:ToggleMinimap()
+    return self:SetMinimapHidden(not self:IsMinimapHidden())
+end
+
 function LP:RefreshStatus()
     local overview = self.frames.overview
     if overview and overview:IsVisible() then RefreshOverview() end
     UpdateMinimapButton()
     local button = self.frames.minimap
-    if button and button:IsShown() and type(GameTooltip) == "table" and GameTooltip:GetOwner() == button then
-        ShowTooltip(button, "minimap")
+    if button and type(GameTooltip) == "table" and GameTooltip:GetOwner() == button then
+        if button:IsShown() then ShowTooltip(button, "minimap") else GameTooltip:Hide() end
     end
+    local menu = self.frames.menu
+    if button and menu and menu.lpOwner == button and not button:IsShown() then menu:Hide() end
     if self.ldbObject then self.ldbObject.text = BrokerText() end
 end
 
