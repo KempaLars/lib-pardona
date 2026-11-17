@@ -1,0 +1,7 @@
+package-as: lib-pardona
+
+ignore:
+  - README.md
+  - media
+  - .luacheckrc
+  - .github
