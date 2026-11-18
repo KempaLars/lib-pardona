@@ -19,12 +19,17 @@ read_globals = {
     "UIParent",
     "UISpecialFrames",
     -- functions
+    "CreateColor",
     "CreateFrame",
+    "GameTooltip_SetBackdropStyle",
     "geterrorhandler",
     "GetCursorPosition",
     "GetLocale",
     "GetMinimapShape",
+    "hooksecurefunc",
+    "InCombatLockdown",
     "IsLoggedIn",
     "issecretvalue",
+    "SharedTooltip_SetBackdropStyle",
     "time",
 }

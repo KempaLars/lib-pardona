@@ -2,13 +2,16 @@
 -- Shared "Pardona" entry point for all Pardona addons: one settings category, one addon
 -- compartment entry, one minimap button and one LibDataBroker launcher.
 -- Embedded library (LibStub). The highest MINOR wins and takes over the existing state.
+-- The style API lives in Style.lua (loaded after this file by lib-pardona.xml); keep
+-- STYLE_FILE_MINOR there equal to MINOR here.
 -- License: MIT
 
-local MAJOR, MINOR = "LibPardona-1.0", 3
+local MAJOR, MINOR = "LibPardona-1.0", 4
 
 assert(LibStub, MAJOR .. " requires LibStub")
 local LP, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)
 if not LP then return end
+LP.minor = MINOR
 
 ---------------------------------------------------------------------------
 -- Persistent state (kept across upgrades to a newer MINOR)
@@ -16,7 +19,8 @@ if not LP then return end
 LP.entries = LP.entries or {}             -- id -> { id, info, addon (= info.addon or nil) }
 LP.order = LP.order or {}                 -- ids in registration order
 LP.subcategories = LP.subcategories or {} -- id -> { category, layout }
-LP.frames = LP.frames or {}               -- events, minimap, menu, overview
+LP.frames = LP.frames or {}               -- events, minimap, menu, overview, styleEvents
+LP.hooks = LP.hooks or {}                 -- hooks installed once (survive MINOR changes)
 -- LP.category, LP.compartmentRegistered, LP.compartmentData, LP.ldbObject, LP.loggedIn, LP.synced
 -- LP.texturePath of MINOR 1/2 was derived from debugstack, whose paths WoW shortens with "...";
 -- it is no longer used.
@@ -62,22 +66,7 @@ local DEFAULT_ANGLE = 225
 local MASK_TEXTURE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local FALLBACK_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 local RADIUS_OFFSET = 5 -- centres the 31x31 button on the Mainline minimap edge (LibDBIcon)
-local BACKDROP_TEMPLATE = BackdropTemplateMixin and "BackdropTemplate" or nil
-local GOLD_R, GOLD_G, GOLD_B = 1, 0.82, 0
-
-local PARDONA_BACKDROP = {
-    bgFile = "Interface\\Buttons\\WHITE8X8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 14,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 },
-}
-
-local function ApplyPardonaBackdrop(frame)
-    if not frame.SetBackdrop then return end
-    frame:SetBackdrop(PARDONA_BACKDROP)
-    frame:SetBackdropColor(0.12, 0.05, 0.18, 0.96)
-    frame:SetBackdropBorderColor(GOLD_R, GOLD_G, GOLD_B, 1)
-end
+local GOLD_R, GOLD_G, GOLD_B = 1, 0.82, 0 -- tooltip title colour
 
 local function ReportError(err)
     if type(geterrorhandler) == "function" then
@@ -114,6 +103,16 @@ end
 
 local function SafeUnregisterEvent(frame, event)
     pcall(frame.UnregisterEvent, frame, event)
+end
+
+-- Own windows (menu, standalone overview) use the "panel" style of Style.lua. A backdrop set by
+-- an older MINOR is removed first. LP.ApplyStyle is only used once the Style.lua of this MINOR
+-- is loaded; during an upgrade Style.lua calls LP:_StyleOwnFrames() again at its end.
+local function StyleOwnFrame(frame)
+    if type(frame.SetBackdrop) == "function" then pcall(frame.SetBackdrop, frame, nil) end
+    if LP.styleLoadedMinor == MINOR and type(LP.ApplyStyle) == "function" then
+        LP:ApplyStyle(frame, { variant = "panel" })
+    end
 end
 
 local function SettingsAvailable()
@@ -295,7 +294,7 @@ local MENU_PADDING = 8
 local function EnsureMenu()
     local menu = LP.frames.menu
     if not menu then
-        menu = CreateFrame("Frame", "LibPardonaMenu", UIParent, BACKDROP_TEMPLATE)
+        menu = CreateFrame("Frame", "LibPardonaMenu", UIParent)
         menu:SetFrameStrata("DIALOG")
         menu:SetClampedToScreen(true)
         menu:EnableMouse(true)
@@ -304,7 +303,7 @@ local function EnsureMenu()
         AddSpecialFrame("LibPardonaMenu")
         LP.frames.menu = menu
     end
-    ApplyPardonaBackdrop(menu)
+    StyleOwnFrame(menu)
     menu:SetScript("OnShow", function(self) SafeRegisterEvent(self, "GLOBAL_MOUSE_DOWN") end)
     menu:SetScript("OnHide", function(self)
         SafeUnregisterEvent(self, "GLOBAL_MOUSE_DOWN")
@@ -546,7 +545,7 @@ end
 local function EnsureOverview()
     local frame = LP.frames.overview
     if not frame then
-        frame = CreateFrame("Frame", "LibPardonaOverview", nil, BACKDROP_TEMPLATE)
+        frame = CreateFrame("Frame", "LibPardonaOverview", nil)
         frame:Hide()
         LP.frames.overview = frame
     end
@@ -577,7 +576,7 @@ local function ToggleStandaloneOverview()
         frame:RegisterForDrag("LeftButton")
         frame:SetScript("OnDragStart", frame.StartMoving)
         frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-        ApplyPardonaBackdrop(frame)
+        StyleOwnFrame(frame)
         local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
         close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, -2)
         AddSpecialFrame("LibPardonaOverview")
@@ -902,6 +901,19 @@ function LP:ToggleMinimap()
     return self:SetMinimapHidden(not self:IsMinimapHidden())
 end
 
+-- Re-anchors the shared minimap button (follows GetMinimapShape(), including "SQUARE").
+function LP:RefreshMinimapButton()
+    UpdateMinimapButton()
+end
+
+-- Applies the panel style to the library's own windows (menu, standalone overview).
+function LP:_StyleOwnFrames()
+    local menu = self.frames.menu
+    if menu then StyleOwnFrame(menu) end
+    local overview = self.frames.overview
+    if overview and overview.lpStandalone then StyleOwnFrame(overview) end
+end
+
 function LP:RefreshStatus()
     local overview = self.frames.overview
     if overview and overview:IsVisible() then RefreshOverview() end
@@ -940,6 +952,14 @@ events:SetScript("OnEvent", function(self, event)
     end
 end)
 
+-- Installed once (marker in LP.hooks); the hook dispatches through LP, so it always runs the
+-- code of the newest MINOR.
+if not LP.hooks.minimapSize and type(Minimap) == "table" and type(Minimap.HookScript) == "function" then
+    if pcall(Minimap.HookScript, Minimap, "OnSizeChanged", function() LP:RefreshMinimapButton() end) then
+        LP.hooks.minimapSize = true
+    end
+end
+
 if not LP.loggedIn then
     if type(IsLoggedIn) == "function" and IsLoggedIn() then
         OnLogin()
@@ -971,6 +991,9 @@ if oldMinor then
     end
     if LP.frames.menu then EnsureMenu() end
     if LP.frames.overview then EnsureOverview() end
+    -- Removes backdrops of older MINORs now; the panel style itself follows as soon as the
+    -- Style.lua of this MINOR is loaded (it calls LP:_StyleOwnFrames() at its end).
+    LP:_StyleOwnFrames()
     if #LP.order > 0 then EnsureMinimapButton() end
     if LP.loggedIn then EnsureLDB() end
     UpdateTextures()
