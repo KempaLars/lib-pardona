@@ -33,3 +33,12 @@ read_globals = {
     "SharedTooltip_SetBackdropStyle",
     "time",
 }
+
+-- In-game test addon (developer tool, not packaged)
+files["tools/LibPardonaTest/LibPardonaTest.lua"] = {
+    globals = {
+        "LibPardonaTestDB",
+        "SLASH_LPTEST1",
+        "SlashCmdList",
+    },
+}

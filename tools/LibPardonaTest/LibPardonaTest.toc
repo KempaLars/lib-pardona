@@ -1,0 +1,6 @@
+## Interface: 16001
+## Title: LibPardona Test
+## SavedVariables: LibPardonaTestDB
+
+Libs\lib-pardona\lib-pardona.xml
+LibPardonaTest.lua
