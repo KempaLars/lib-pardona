@@ -366,11 +366,21 @@ end
 together with the current library checkout:
 
 ```powershell
+.\tools\install-test.ps1
+```
+
+Without parameters it installs into the default WoW Forever folder
+`C:\Program Files (x86)\World of Warcraft\_forever_\Interface\AddOns`. For a different installation pass
+the AddOns folder explicitly:
+
+```powershell
 .\tools\install-test.ps1 -AddOnsPath "<…>\Interface\AddOns"
 ```
 
 The script deletes and recreates only `<AddOnsPath>\LibPardonaTest` and copies `lib-pardona.xml`,
-`LibStub\` and `LibPardona-1.0\` to `LibPardonaTest\Libs\lib-pardona\`.
+`LibStub\` and `LibPardona-1.0\` to `LibPardonaTest\Libs\lib-pardona\`. If it gets "access denied"
+(Program Files), it stops with a message: start PowerShell as administrator or check the write
+permissions for the WoW folder.
 
 | Command | |
 | --- | --- |
