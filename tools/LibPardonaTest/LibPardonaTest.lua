@@ -59,6 +59,7 @@ local HELP = {
     "/lptest combat - thin style on PlayerFrame on/off (prints true / queued / false)",
     "/lptest minimap - RefreshMinimapButton and print GetMinimapShape()",
     "/lptest status - LP.minor, LP.STYLE_VERSION and IsStyled of all test targets",
+    "/lptest audit - checks every styled frame for a backdrop border (expected: none)",
 }
 
 local function PrintHelp()
@@ -310,9 +311,45 @@ local function CmdStatus()
 end
 
 ---------------------------------------------------------------------------
+-- audit
+---------------------------------------------------------------------------
+local function ObjectName(obj)
+    if type(obj) == "table" and type(obj.GetName) == "function" then
+        local ok, name = pcall(obj.GetName, obj)
+        if ok and not IsSecret(name) and type(name) == "string" then return name end
+    end
+    return tostring(obj)
+end
+
+local function CmdAudit()
+    local registry = LP.styleRegistry
+    if type(registry) ~= "table" then
+        Print("LP.styleRegistry does not exist")
+        return
+    end
+    local entries, findings = 0, 0
+    for obj, rec in pairs(registry) do
+        entries = entries + 1
+        local border = Field(Field(rec, "parts"), "border")
+        local hasSetBackdrop = type(Field(border, "SetBackdrop")) == "function"
+        local hasBackdropInfo = Field(border, "backdropInfo") ~= nil
+        if hasSetBackdrop then findings = findings + 1 end
+        if hasBackdropInfo then findings = findings + 1 end
+        Print(ObjectName(obj) .. ":", "variant", tostring(Field(rec, "variant")),
+            "SetBackdrop", tostring(hasSetBackdrop), "backdropInfo", tostring(hasBackdropInfo))
+    end
+    if findings == 0 then
+        Print("audit ok (" .. entries .. " entries)")
+    else
+        Print("audit: " .. findings .. " finding(s) in " .. entries .. " entries")
+    end
+end
+
+---------------------------------------------------------------------------
 -- Slash command
 ---------------------------------------------------------------------------
 local COMMANDS = {
+    audit = CmdAudit,
     demo = CmdDemo,
     char = CmdChar,
     tip = CmdTip,
