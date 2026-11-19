@@ -264,8 +264,14 @@ The library never reads or sets status bar values (`GetValue`, `SetValue`, `GetM
 ### Rules
 
 - **Foreign frames are fine.** The library only adds its own parts: background textures on the target
-  (layer `BACKGROUND`, sublevel -8, anchored with `SetPoint`, no fixed size), a child frame with
-  `BackdropTemplate` (edge only, mouse disabled) for the border and, for buttons, a `HIGHLIGHT` texture.
+  (layer `BACKGROUND`, sublevel -8, anchored with `SetPoint`, no fixed size), a plain child frame for
+  the border (mouse disabled) and, for buttons, a `HIGHLIGHT` texture.
+- **Border from own textures, no size maths.** The border is built from the library's own textures
+  (8 pieces of `edge.file` for the rounded edge, 4 one-pixel lines for the thin one) in the `BORDER`
+  layer of that child frame, placed with anchors only. There is no `BackdropTemplate`, no
+  `OnSizeChanged` script and no `GetWidth` / `GetHeight` / `GetSize` / `GetRect` on target or border,
+  so it also works on frames with secret sizes (tooltips with secret content). Edges are stretched,
+  not tiled. Since MINOR 5; borders built by MINOR 4 with `BackdropTemplate` are replaced on upgrade.
 - **Only `SetAlpha`.** Hidden parts are set to alpha 0 after remembering their original alpha; there is no
   `Hide`/`Show` on foreign parts. Regions whose alpha is a secret value are skipped.
 - **No fields in Blizzard frames.** All data lives in the library's registry (`LP.styleRegistry`, weak keys).
@@ -394,6 +400,14 @@ permissions for the WoW folder.
 | `/lptest combat` | Thin style on `PlayerFrame` on/off; prints `true` / `queued` / `false`. |
 | `/lptest minimap` | Calls `LP:RefreshMinimapButton()` and prints `GetMinimapShape()`. |
 | `/lptest status` | `LP.minor`, `LP.STYLE_VERSION` and both `IsStyled` values of all test targets. |
+| `/lptest audit` | Lists every entry of `LP.styleRegistry` with its variant and whether its border frame has a `SetBackdrop` method or a `backdropInfo` field (both expected: no). Ends with `audit ok` or the number of findings. |
+
+## Changelog
+
+- **1.1.1 (MINOR 5)**: Style borders without `BackdropTemplate`; fixes the taint error in
+  `Backdrop.lua` (arithmetic on a secret frame size, e.g. tooltips). Secret-value guard for the minimap size.
+- **1.1.0 (MINOR 4)**: Style API.
+- **1.0.2 (MINOR 3)**: `info.addon` for version and emblem textures.
 
 ## License
 

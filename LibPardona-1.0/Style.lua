@@ -4,7 +4,7 @@
 -- Only the copy that has just taken over the library runs this file, and only once.
 -- License: MIT
 
-local STYLE_FILE_MINOR = 4 -- always equal to MINOR in LibPardona-1.0.lua
+local STYLE_FILE_MINOR = 5 -- always equal to MINOR in LibPardona-1.0.lua
 local LP = LibStub and LibStub("LibPardona-1.0", true)
 if not LP or LP.minor ~= STYLE_FILE_MINOR or LP.styleLoadedMinor == STYLE_FILE_MINOR then return end
 LP.styleLoadedMinor = STYLE_FILE_MINOR
@@ -14,7 +14,8 @@ LP.STYLE_VERSION = 1
 ---------------------------------------------------------------------------
 -- Persistent state (kept across upgrades to a newer MINOR)
 ---------------------------------------------------------------------------
--- styled object -> record { v = 1, variant, ... }; FontStrings get records with variant "font"
+-- styled object -> record { v = 2, variant, ... } (v = 1: MINOR 4, BackdropTemplate border);
+-- FontStrings get records with variant "font"
 LP.styleRegistry = LP.styleRegistry or setmetatable({}, { __mode = "k" })
 -- object -> { action = "apply" | "remove", method, opts, border } (queued during combat)
 LP.stylePending = LP.stylePending or setmetatable({}, { __mode = "k" })
@@ -28,8 +29,7 @@ local registry = LP.styleRegistry
 local pending = LP.stylePending
 local spare = LP.styleSpare
 
-local RECORD_VERSION = 1
-local BACKDROP_TEMPLATE = BackdropTemplateMixin and "BackdropTemplate" or nil
+local RECORD_VERSION = 2
 
 ---------------------------------------------------------------------------
 -- Small helpers (local copies; no new globals)
@@ -255,11 +255,116 @@ local function DefaultBorderColor(variant)
     return colors[def and def.border or "border"]
 end
 
+-- Vertex colour on every texture of the border set that is currently in use.
 local function ApplyBorderColor(rec)
-    local border = rec.parts.border
-    if not border or type(border.SetBackdropBorderColor) ~= "function" then return end
+    local parts = rec.parts
+    if not parts or not parts.border then return end
+    local set = rec.rounded and parts.edges or parts.lines
+    if not set then return end
     local color = rec.borderColor or DefaultBorderColor(rec.variant)
-    border:SetBackdropBorderColor(color[1], color[2], color[3], color[4])
+    for _, texture in pairs(set) do
+        texture:SetVertexColor(color[1], color[2], color[3], color[4])
+    end
+end
+
+-- Removes a border frame created with BackdropTemplate (MINOR 4) from parts.
+local function DropBackdropBorder(parts)
+    local border = parts.border
+    if not border then return end
+    if type(border.SetBackdrop) == "function" then pcall(border.SetBackdrop, border, nil) end
+    if type(border.ClearBackdrop) == "function" then pcall(border.ClearBackdrop, border) end
+    pcall(border.Hide, border)
+    parts.border = nil
+    parts.edges = nil
+    parts.lines = nil
+end
+
+-- The border never reads or computes any size (target sizes may be secret, e.g. tooltips); all
+-- textures are placed with anchors only, and edges are stretched instead of tiled.
+local function BuildRoundedEdges(border, parts)
+    local edges = parts.edges
+    if not edges then
+        edges = {}
+        for _, key in ipairs({ "tl", "tr", "bl", "br", "left", "right", "top", "bottom" }) do
+            edges[key] = border:CreateTexture(nil, "BORDER")
+        end
+        parts.edges = edges
+    end
+    local file, s = Style.edge.file, Style.edge.size
+    for _, texture in pairs(edges) do
+        texture:SetTexture(file)
+        texture:ClearAllPoints()
+    end
+    -- the edge file holds 8 segments side by side: left, right, top, bottom, TL, TR, BL, BR
+    local tl, tr, bl, br = edges.tl, edges.tr, edges.bl, edges.br
+    tl:SetSize(s, s)
+    tl:SetPoint("TOPLEFT", border, "TOPLEFT")
+    tl:SetTexCoord(0.5, 0.625, 0, 1)
+    tr:SetSize(s, s)
+    tr:SetPoint("TOPRIGHT", border, "TOPRIGHT")
+    tr:SetTexCoord(0.625, 0.75, 0, 1)
+    bl:SetSize(s, s)
+    bl:SetPoint("BOTTOMLEFT", border, "BOTTOMLEFT")
+    bl:SetTexCoord(0.75, 0.875, 0, 1)
+    br:SetSize(s, s)
+    br:SetPoint("BOTTOMRIGHT", border, "BOTTOMRIGHT")
+    br:SetTexCoord(0.875, 1, 0, 1)
+
+    local left, right, top, bottom = edges.left, edges.right, edges.top, edges.bottom
+    left:SetWidth(s)
+    left:SetPoint("TOPLEFT", tl, "BOTTOMLEFT")
+    left:SetPoint("BOTTOMLEFT", bl, "TOPLEFT")
+    left:SetTexCoord(0, 0.125, 0, 1)
+    right:SetWidth(s)
+    right:SetPoint("TOPRIGHT", tr, "BOTTOMRIGHT")
+    right:SetPoint("BOTTOMRIGHT", br, "TOPRIGHT")
+    right:SetTexCoord(0.125, 0.25, 0, 1)
+    -- the top and bottom segments are stored rotated in the file
+    top:SetHeight(s)
+    top:SetPoint("TOPLEFT", tl, "TOPRIGHT")
+    top:SetPoint("TOPRIGHT", tr, "TOPLEFT")
+    top:SetTexCoord(0.25, 1, 0.375, 1, 0.25, 0, 0.375, 0)
+    bottom:SetHeight(s)
+    bottom:SetPoint("BOTTOMLEFT", bl, "BOTTOMRIGHT")
+    bottom:SetPoint("BOTTOMRIGHT", br, "BOTTOMLEFT")
+    bottom:SetTexCoord(0.375, 1, 0.5, 1, 0.375, 0, 0.5, 0)
+
+    for _, texture in pairs(edges) do texture:Show() end
+end
+
+-- Square 1-px border; the lines overlap in the corners so there is no gap.
+local function BuildThinLines(border, parts)
+    local lines = parts.lines
+    if not lines then
+        lines = {}
+        for _, key in ipairs({ "top", "bottom", "left", "right" }) do
+            lines[key] = border:CreateTexture(nil, "BORDER")
+        end
+        parts.lines = lines
+    end
+    local size = Style.thin.size
+    for _, texture in pairs(lines) do
+        texture:SetColorTexture(1, 1, 1, 1)
+        texture:ClearAllPoints()
+    end
+    lines.top:SetHeight(size)
+    lines.top:SetPoint("TOPLEFT", border, "TOPLEFT")
+    lines.top:SetPoint("TOPRIGHT", border, "TOPRIGHT")
+    lines.bottom:SetHeight(size)
+    lines.bottom:SetPoint("BOTTOMLEFT", border, "BOTTOMLEFT")
+    lines.bottom:SetPoint("BOTTOMRIGHT", border, "BOTTOMRIGHT")
+    lines.left:SetWidth(size)
+    lines.left:SetPoint("TOPLEFT", border, "TOPLEFT")
+    lines.left:SetPoint("BOTTOMLEFT", border, "BOTTOMLEFT")
+    lines.right:SetWidth(size)
+    lines.right:SetPoint("TOPRIGHT", border, "TOPRIGHT")
+    lines.right:SetPoint("BOTTOMRIGHT", border, "BOTTOMRIGHT")
+    for _, texture in pairs(lines) do texture:Show() end
+end
+
+local function HideSet(set)
+    if not set then return end
+    for _, texture in pairs(set) do texture:Hide() end
 end
 
 local function BuildParts(frame, rec)
@@ -267,7 +372,6 @@ local function BuildParts(frame, rec)
     local parts = rec.parts
     local off = rec.offsets
     local target = rec.iconTex or frame
-    local edge = rec.rounded and Style.edge or Style.thin
     local inset = rec.rounded and Style.edge.inset or 0
     local outset = def.outset or 0
 
@@ -286,10 +390,11 @@ local function BuildParts(frame, rec)
         parts.bg:Hide()
     end
 
-    -- border
+    -- border: plain frame without BackdropTemplate, holding own textures
+    if parts.border and type(parts.border.SetBackdrop) == "function" then DropBackdropBorder(parts) end
     local border = parts.border
     if not border then
-        border = CreateFrame("Frame", nil, frame, BACKDROP_TEMPLATE)
+        border = CreateFrame("Frame", nil, frame)
         parts.border = border
     end
     border:EnableMouse(false)
@@ -298,8 +403,12 @@ local function BuildParts(frame, rec)
     if okLevel and IsNumber(level) then
         border:SetFrameLevel(math.max(0, level + 1 + rec.levelOffset))
     end
-    if type(border.SetBackdrop) == "function" then
-        border:SetBackdrop({ edgeFile = edge.file, edgeSize = edge.size })
+    if rec.rounded then
+        HideSet(parts.lines)
+        BuildRoundedEdges(border, parts)
+    else
+        HideSet(parts.edges)
+        BuildThinLines(border, parts)
     end
     ApplyBorderColor(rec)
     border:Show()
@@ -370,7 +479,7 @@ end
 
 local function GetBarTexture(bar)
     local texture = bar:GetStatusBarTexture()
-    if not texture then return nil end
+    if IsSecret(texture) or type(texture) ~= "table" then return nil end
     return texture:GetTexture()
 end
 
@@ -764,6 +873,44 @@ if styleEvents then
 end
 
 LP:_EnsureStyleHooks()
+
+---------------------------------------------------------------------------
+-- Takeover of borders built by MINOR 4 (BackdropTemplate)
+---------------------------------------------------------------------------
+-- Backdrop's OnSizeChanged computes with the frame size, which fails in our tainted context as soon
+-- as the target (e.g. a tooltip) has a secret size. Such borders are stripped and rebuilt.
+local function RebuildBorder(frame, rec)
+    BuildParts(frame, rec)
+    ApplyBorderColor(rec)
+end
+
+local function MigrateRecord(frame, rec)
+    local parts = rec.parts
+    local border = type(parts) == "table" and parts.border or nil
+    local hasBackdrop = border ~= nil and type(border.SetBackdrop) == "function"
+    if rec.v == RECORD_VERSION and not hasBackdrop then return end
+    if border then
+        DropBackdropBorder(parts)
+        if VARIANTS[rec.variant] then
+            local ok, err = pcall(RebuildBorder, frame, rec)
+            if not ok then ReportError(err) end
+        end
+    end
+    rec.v = RECORD_VERSION
+end
+
+for frame, rec in pairs(registry) do
+    if type(rec) == "table" then
+        local ok, err = pcall(MigrateRecord, frame, rec)
+        if not ok then ReportError(err) end
+    end
+end
+for _, parts in pairs(spare) do
+    if type(parts) == "table" and parts.border and type(parts.border.SetBackdrop) == "function" then
+        local ok, err = pcall(DropBackdropBorder, parts)
+        if not ok then ReportError(err) end
+    end
+end
 
 -- The library's own windows (menu, standalone overview) switch to the panel style.
 if type(LP._StyleOwnFrames) == "function" then LP:_StyleOwnFrames() end

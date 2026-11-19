@@ -6,7 +6,7 @@
 -- STYLE_FILE_MINOR there equal to MINOR here.
 -- License: MIT
 
-local MAJOR, MINOR = "LibPardona-1.0", 4
+local MAJOR, MINOR = "LibPardona-1.0", 5
 
 assert(LibStub, MAJOR .. " requires LibStub")
 local LP, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)
@@ -637,10 +637,13 @@ local function UpdateMinimapButton()
     local state = MinimapState()
     local rad = math.rad(state.angle)
     local x, y = math.cos(rad), math.sin(rad)
-    local w = Minimap:GetWidth() / 2 + RADIUS_OFFSET
-    local h = Minimap:GetHeight() / 2 + RADIUS_OFFSET
+    -- the minimap size may be a secret value: then the button is not moved
+    local mapW, mapH = Minimap:GetWidth(), Minimap:GetHeight()
+    if IsSecret(mapW) or IsSecret(mapH) or type(mapW) ~= "number" or type(mapH) ~= "number" then return end
+    local w = mapW / 2 + RADIUS_OFFSET
+    local h = mapH / 2 + RADIUS_OFFSET
     local shape = (type(GetMinimapShape) == "function") and GetMinimapShape() or "ROUND"
-    if shape == "SQUARE" then
+    if not IsSecret(shape) and shape == "SQUARE" then
         local dw, dh = math.sqrt(2 * w * w) - 10, math.sqrt(2 * h * h) - 10
         x = math.max(-w, math.min(x * dw, w))
         y = math.max(-h, math.min(y * dh, h))
@@ -658,6 +661,11 @@ local function DragUpdate()
     local mx, my = Minimap:GetCenter()
     local px, py = GetCursorPosition()
     local scale = Minimap:GetEffectiveScale()
+    local values = { mx, my, px, py, scale }
+    for i = 1, 5 do
+        if IsSecret(values[i]) or type(values[i]) ~= "number" then return end
+    end
+    if scale == 0 then return end
     WriteMinimap("angle", math.deg(math.atan2(py / scale - my, px / scale - mx)) % 360)
     UpdateMinimapButton()
 end
