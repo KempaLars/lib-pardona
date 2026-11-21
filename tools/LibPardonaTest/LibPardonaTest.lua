@@ -1,4 +1,4 @@
--- LibPardonaTest – in-game test addon for the LibPardona-1.0 style API.
+-- LibPardonaTest – in-game test addon for the LibPardona-1.0 style API and menu entries.
 -- Developer tool (English only), not packaged. Install with tools\install-test.ps1.
 
 local ADDON = ...
@@ -58,8 +58,9 @@ local HELP = {
     "/lptest bar - StyleStatusBar on GameTooltipStatusBar on/off",
     "/lptest combat - thin style on PlayerFrame on/off (prints true / queued / false)",
     "/lptest minimap - RefreshMinimapButton and print GetMinimapShape()",
-    "/lptest status - LP.minor, LP.STYLE_VERSION and IsStyled of all test targets",
+    "/lptest status - LP.minor, LP.STYLE_VERSION, LP.MENU_VERSION and IsStyled of all test targets",
     "/lptest audit - checks every styled frame for a backdrop border (expected: none)",
+    "/lptest nomenu - menu entries of the test addon on/off (registers again)",
 }
 
 local function PrintHelp()
@@ -303,7 +304,7 @@ local function StatusTargets()
 end
 
 local function CmdStatus()
-    Print("LP.minor:", LP.minor, "LP.STYLE_VERSION:", LP.STYLE_VERSION)
+    Print("LP.minor:", LP.minor, "LP.STYLE_VERSION:", LP.STYLE_VERSION, "LP.MENU_VERSION:", LP.MENU_VERSION)
     for _, target in ipairs(StatusTargets()) do
         local variant, queued = LP:IsStyled(target[2])
         Print(target[1] .. ":", variant, queued)
@@ -346,10 +347,68 @@ local function CmdAudit()
 end
 
 ---------------------------------------------------------------------------
+-- Registration and menu entries
+---------------------------------------------------------------------------
+local menuOn = true
+local clickCount = 0
+
+local function MenuEntries()
+    return {
+        {
+            text = "Demo window",
+            onClick = function() CmdDemo() end,
+        },
+        {
+            text = "Tooltip style",
+            checked = function() return tipOn end,
+            onClick = function() CmdTip() end,
+        },
+        {
+            text = function() return "Click counter: " .. clickCount end,
+            tooltip = "Text is re-evaluated on every open.",
+            onClick = function()
+                clickCount = clickCount + 1
+                Print("click counter:", clickCount)
+            end,
+        },
+        {
+            text = "Disabled entry",
+            disabled = true,
+            tooltip = "This entry is disabled.",
+            onClick = function() Print("disabled entry clicked (should not happen)") end,
+        },
+        {
+            text = "Error test",
+            tooltip = "Shows a Lua error on purpose.",
+            onClick = function() error("LibPardonaTest: intentional menu error") end,
+        },
+    }
+end
+
+local function Register()
+    if type(LibPardonaTestDB) ~= "table" then LibPardonaTestDB = {} end
+    LP:RegisterAddon("LibPardonaTest", {
+        name = "LibPardona Test",
+        addon = "LibPardonaTest",
+        icon = "Interface\\Icons\\INV_Misc_QuestionMark",
+        db = LibPardonaTestDB,
+        onClick = function() PrintHelp() end,
+        menu = menuOn and MenuEntries or nil,
+    })
+end
+
+local function CmdNoMenu()
+    menuOn = not menuOn
+    Register()
+    Print(menuOn and "menu entries on" or "menu entries off")
+end
+
+---------------------------------------------------------------------------
 -- Slash command
 ---------------------------------------------------------------------------
 local COMMANDS = {
     audit = CmdAudit,
+    nomenu = CmdNoMenu,
     demo = CmdDemo,
     char = CmdChar,
     tip = CmdTip,
@@ -387,13 +446,6 @@ local events = CreateFrame("Frame")
 events:SetScript("OnEvent", function(self, event, name)
     if event ~= "ADDON_LOADED" or name ~= ADDON then return end
     self:UnregisterEvent("ADDON_LOADED")
-    if type(LibPardonaTestDB) ~= "table" then LibPardonaTestDB = {} end
-    LP:RegisterAddon("LibPardonaTest", {
-        name = "LibPardona Test",
-        addon = "LibPardonaTest",
-        icon = "Interface\\Icons\\INV_Misc_QuestionMark",
-        db = LibPardonaTestDB,
-        onClick = function() PrintHelp() end,
-    })
+    Register()
 end)
 SafeRegisterEvent(events, "ADDON_LOADED")
