@@ -4,7 +4,7 @@
 -- Only the copy that has just taken over the library runs this file, and only once.
 -- License: MIT
 
-local STYLE_FILE_MINOR = 5 -- always equal to MINOR in LibPardona-1.0.lua
+local STYLE_FILE_MINOR = 6 -- always equal to MINOR in LibPardona-1.0.lua
 local LP = LibStub and LibStub("LibPardona-1.0", true)
 if not LP or LP.minor ~= STYLE_FILE_MINOR or LP.styleLoadedMinor == STYLE_FILE_MINOR then return end
 LP.styleLoadedMinor = STYLE_FILE_MINOR

@@ -6,12 +6,13 @@
 -- STYLE_FILE_MINOR there equal to MINOR here.
 -- License: MIT
 
-local MAJOR, MINOR = "LibPardona-1.0", 5
+local MAJOR, MINOR = "LibPardona-1.0", 6
 
 assert(LibStub, MAJOR .. " requires LibStub")
 local LP, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)
 if not LP then return end
 LP.minor = MINOR
+LP.MENU_VERSION = 1 -- per-addon menu entries (info.menu), since MINOR 6
 
 ---------------------------------------------------------------------------
 -- Persistent state (kept across upgrades to a newer MINOR)
@@ -40,6 +41,7 @@ local L = {
     COL_VERSION = "Version",
     COL_STATUS = "Status",
     HINT_LEFT_ONE = "Left-click: open %s",
+    HINT_LEFT_ONE_MENU = "Left-click: %s menu",
     HINT_LEFT_MENU = "Left-click: choose addon",
     HINT_RIGHT = "Right-click: overview",
     HINT_DRAG = "Drag: move button",
@@ -54,6 +56,7 @@ if locale == "deDE" then
     L.NO_ADDONS = "Kein Pardona-Addon registriert."
     L.COL_STATUS = "Status"
     L.HINT_LEFT_ONE = "Linksklick: %s öffnen"
+    L.HINT_LEFT_ONE_MENU = "Linksklick: Menü von %s"
     L.HINT_LEFT_MENU = "Linksklick: Addon wählen"
     L.HINT_RIGHT = "Rechtsklick: Übersicht"
     L.HINT_DRAG = "Ziehen: Button verschieben"
@@ -186,6 +189,84 @@ local function CallOnClick(entry, button)
 end
 
 ---------------------------------------------------------------------------
+-- Menu entries (info.menu, MINOR 6)
+---------------------------------------------------------------------------
+local MENU_MAX_ENTRIES = 12
+
+local function RawField(t, key)
+    return t[key]
+end
+
+-- Protected field read; errors are reported, secret values count as nil.
+local function MenuField(t, key)
+    local ok, value = pcall(RawField, t, key)
+    if not ok then
+        ReportError(value)
+        return nil
+    end
+    if IsSecret(value) then return nil end
+    return value
+end
+
+-- Field value of a menu entry; functions are evaluated (pcall), secret values and errors count as nil.
+local function MenuValue(t, key)
+    local value = MenuField(t, key)
+    if type(value) == "function" then
+        local ok, result = pcall(value)
+        if not ok then
+            ReportError(result)
+            return nil
+        end
+        if IsSecret(result) then return nil end
+        value = result
+    end
+    return value
+end
+
+-- Evaluates info.menu of an entry. Called on every opening of the menu; nothing is cached.
+-- Returns a list of { text, onClick, checked, disabled, tooltip } (at most MENU_MAX_ENTRIES).
+local function CollectMenu(entry)
+    local items = {}
+    local source = entry.info.menu
+    local list
+    if type(source) == "function" then
+        local ok, result = pcall(source)
+        if not ok then
+            ReportError(result)
+            return items
+        end
+        list = result
+    elseif type(source) == "table" then
+        list = source
+    end
+    if IsSecret(list) or type(list) ~= "table" then return items end
+
+    for _, item in ipairs(list) do
+        if #items >= MENU_MAX_ENTRIES then break end
+        if not IsSecret(item) and type(item) == "table" then
+            local text = MenuValue(item, "text")
+            local onClick = MenuField(item, "onClick")
+            if type(text) == "string" and text ~= "" and type(onClick) == "function" then
+                local tooltip = MenuValue(item, "tooltip")
+                items[#items + 1] = {
+                    text = text,
+                    onClick = onClick,
+                    checked = MenuValue(item, "checked") == true,
+                    disabled = MenuValue(item, "disabled") == true,
+                    tooltip = (type(tooltip) == "string" and tooltip ~= "") and tooltip or nil,
+                }
+            end
+        end
+    end
+    return items
+end
+
+local function CallMenuEntry(onClick, button)
+    local ok, err = pcall(onClick, button or "LeftButton")
+    if not ok then ReportError(err) end
+end
+
+---------------------------------------------------------------------------
 -- Saved settings (db.minimap in every registered addon)
 ---------------------------------------------------------------------------
 local function NormalizeMinimap(db, migrated)
@@ -265,7 +346,9 @@ local function FillTooltip(tooltip, mode)
     if mode then
         tooltip:AddLine(" ")
         if #LP.order == 1 then
-            tooltip:AddLine(L.HINT_LEFT_ONE:format(LP.entries[LP.order[1]].info.name), 0.7, 0.7, 0.7)
+            local entry = LP.entries[LP.order[1]]
+            local hint = (#CollectMenu(entry) > 0) and L.HINT_LEFT_ONE_MENU or L.HINT_LEFT_ONE
+            tooltip:AddLine(hint:format(entry.info.name), 0.7, 0.7, 0.7)
         else
             tooltip:AddLine(L.HINT_LEFT_MENU, 0.7, 0.7, 0.7)
         end
@@ -288,8 +371,15 @@ end
 ---------------------------------------------------------------------------
 -- Addon menu (Pardona style: dark purple, gold border)
 ---------------------------------------------------------------------------
-local MENU_ROW_HEIGHT = 22
+local MENU_ROW_HEIGHT = 22       -- addon rows and "Pardona settings"
+local MENU_ENTRY_HEIGHT = 18     -- menu entries of an addon
+local MENU_ENTRY_INDENT = 18
+local MENU_GROUP_GAP = 4         -- between two addon groups (only if any addon has entries)
 local MENU_PADDING = 8
+local MENU_CHECK_SIZE = 14
+local MENU_CHECK_TEXTURE = "Interface\\Buttons\\UI-CheckBox-Check"
+local MENU_ICON_TEXT_X = 26      -- 4 + icon 16 + 6
+local MENU_ENTRY_TEXT_X = 4 + MENU_ENTRY_INDENT + MENU_CHECK_SIZE + 4
 
 local function EnsureMenu()
     local menu = LP.frames.menu
@@ -308,6 +398,7 @@ local function EnsureMenu()
     menu:SetScript("OnHide", function(self)
         SafeUnregisterEvent(self, "GLOBAL_MOUSE_DOWN")
         self.lpOwner = nil
+        for _, row in ipairs(self.lpRows) do HideTooltip(row) end
     end)
     menu:SetScript("OnEvent", function(self)
         local owner = self.lpOwner
@@ -331,13 +422,88 @@ local function GetMenuRow(menu, index)
         row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
         row.icon = row:CreateTexture(nil, "ARTWORK")
         row.icon:SetSize(16, 16)
-        row.icon:SetPoint("LEFT", row, "LEFT", 4, 0)
         row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        row.text:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
         row.text:SetJustifyH("LEFT")
         menu.lpRows[index] = row
     end
+    -- parts added in later MINORs are retrofitted, also onto rows created by an older copy
+    if not row.check then
+        row.check = row:CreateTexture(nil, "ARTWORK")
+        row.check:SetTexture(MENU_CHECK_TEXTURE)
+        row.check:SetSize(MENU_CHECK_SIZE, MENU_CHECK_SIZE)
+        row.check:Hide()
+    end
     return row
+end
+
+local function ShowMenuEntryTooltip(row)
+    local text = row.lpTooltip
+    if type(GameTooltip) ~= "table" or type(text) ~= "string" then return end
+    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+    GameTooltip:SetText(text, 1, 1, 1, 1, true)
+    GameTooltip:Show()
+end
+
+-- Fully resets a (possibly reused) row and sets it up for item. Returns the width the row needs.
+local function SetupMenuRow(menu, row, item, y)
+    row:SetScript("OnClick", nil)
+    row:SetScript("OnEnter", nil)
+    row:SetScript("OnLeave", nil)
+    row.lpTooltip = nil
+    -- disabled entries keep their tooltip
+    if type(row.SetMotionScriptsWhileDisabled) == "function" then row:SetMotionScriptsWhileDisabled(true) end
+    row:Enable()
+    local highlight = row:GetHighlightTexture()
+    if highlight then highlight:SetAlpha(1) end
+
+    local entryRow = item.kind == "entry"
+    row:SetHeight(entryRow and MENU_ENTRY_HEIGHT or MENU_ROW_HEIGHT)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", menu, "TOPLEFT", MENU_PADDING, -y)
+    row:SetPoint("TOPRIGHT", menu, "TOPRIGHT", -MENU_PADDING, -y)
+
+    row.icon:ClearAllPoints()
+    row.check:ClearAllPoints()
+    row.text:ClearAllPoints()
+    local textX
+    if entryRow then
+        row.icon:Hide()
+        row.check:SetPoint("LEFT", row, "LEFT", 4 + MENU_ENTRY_INDENT, 0)
+        if item.checked then row.check:Show() else row.check:Hide() end
+        row.text:SetFontObject("GameFontHighlightSmall")
+        textX = MENU_ENTRY_TEXT_X
+    else
+        row.check:Hide()
+        row.icon:SetPoint("LEFT", row, "LEFT", 4, 0)
+        row.icon:SetTexture(item.icon)
+        row.icon:Show()
+        row.text:SetFontObject("GameFontHighlight")
+        textX = MENU_ICON_TEXT_X
+    end
+    row.text:SetPoint("LEFT", row, "LEFT", textX, 0)
+    row.text:SetText(item.text)
+
+    if item.disabled then
+        row.text:SetTextColor(0.5, 0.5, 0.5)
+        if highlight then highlight:SetAlpha(0) end
+        row:Disable()
+    else
+        row.text:SetTextColor(1, 1, 1)
+        row:SetScript("OnClick", function(_, button)
+            menu:Hide()
+            item.func(button)
+        end)
+    end
+    if item.tooltip then
+        row.lpTooltip = item.tooltip
+        row:SetScript("OnEnter", ShowMenuEntryTooltip)
+        row:SetScript("OnLeave", HideTooltip)
+    end
+    row:Show()
+
+    local textWidth = row.text:GetStringWidth()
+    if IsSecret(textWidth) or type(textWidth) ~= "number" then textWidth = 0 end
+    return textWidth + textX + 8
 end
 
 local function AnchorMenu(menu, owner)
@@ -358,7 +524,8 @@ local function AnchorMenu(menu, owner)
     end
 end
 
-local function ToggleMenu(owner)
+-- collected: optional { [id] = CollectMenu(entry) } already evaluated for this click.
+local function ToggleMenu(owner, collected)
     local menu = EnsureMenu()
     if menu:IsShown() and menu.lpOwner == owner then
         menu:Hide()
@@ -366,40 +533,49 @@ local function ToggleMenu(owner)
     end
 
     local items = {}
+    local anyEntries = false
     for _, id in ipairs(LP.order) do
         local entry = LP.entries[id]
         items[#items + 1] = {
+            kind = "addon",
             icon = entry.info.icon,
             text = entry.info.name,
             func = function(button) CallOnClick(entry, button) end,
         }
+        local menuEntries = (collected and collected[id]) or CollectMenu(entry)
+        for _, menuEntry in ipairs(menuEntries) do
+            anyEntries = true
+            local onClick = menuEntry.onClick
+            items[#items + 1] = {
+                kind = "entry",
+                text = menuEntry.text,
+                checked = menuEntry.checked,
+                disabled = menuEntry.disabled,
+                tooltip = menuEntry.tooltip,
+                func = function(button) CallMenuEntry(onClick, button) end,
+            }
+        end
     end
     items[#items + 1] = {
+        kind = "addon",
         icon = EmblemTexture(),
         text = L.SETTINGS,
         func = function() LP:OpenSettings() end,
     }
 
     local width = 140
+    local y = MENU_PADDING
     for index, item in ipairs(items) do
+        if anyEntries and index > 1 and item.kind == "addon" then y = y + MENU_GROUP_GAP end
         local row = GetMenuRow(menu, index)
-        row.icon:SetTexture(item.icon)
-        row.text:SetText(item.text)
-        row:SetScript("OnClick", function(_, button)
-            menu:Hide()
-            item.func(button)
-        end)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", menu, "TOPLEFT", MENU_PADDING, -MENU_PADDING - (index - 1) * MENU_ROW_HEIGHT)
-        row:SetPoint("TOPRIGHT", menu, "TOPRIGHT", -MENU_PADDING, -MENU_PADDING - (index - 1) * MENU_ROW_HEIGHT)
-        row:Show()
-        width = math.max(width, row.text:GetStringWidth() + 34)
+        width = math.max(width, SetupMenuRow(menu, row, item, y))
+        y = y + ((item.kind == "entry") and MENU_ENTRY_HEIGHT or MENU_ROW_HEIGHT)
     end
     for index = #items + 1, #menu.lpRows do
         menu.lpRows[index]:Hide()
     end
 
-    menu:SetSize(width + 2 * MENU_PADDING, #items * MENU_ROW_HEIGHT + 2 * MENU_PADDING)
+    menu:SetSize(width + 2 * MENU_PADDING, y + MENU_PADDING)
     AnchorMenu(menu, owner)
     menu.lpOwner = owner
     menu:Show()
@@ -418,8 +594,15 @@ local function HandleClick(owner, button)
     if count == 0 then
         LP:OpenSettings()
     elseif count == 1 then
-        HideMenu()
-        CallOnClick(LP.entries[LP.order[1]], "LeftButton")
+        local id = LP.order[1]
+        local entry = LP.entries[id]
+        local menuEntries = CollectMenu(entry)
+        if #menuEntries > 0 then
+            ToggleMenu(owner, { [id] = menuEntries })
+        else
+            HideMenu()
+            CallOnClick(entry, "LeftButton")
+        end
     else
         ToggleMenu(owner)
     end
@@ -635,23 +818,24 @@ local function UpdateMinimapButton()
         return
     end
     local state = MinimapState()
-    local rad = math.rad(state.angle)
-    local x, y = math.cos(rad), math.sin(rad)
-    -- the minimap size may be a secret value: then the button is not moved
+    -- the minimap size may be a secret value: then the button is not moved, but hide/show still applies
     local mapW, mapH = Minimap:GetWidth(), Minimap:GetHeight()
-    if IsSecret(mapW) or IsSecret(mapH) or type(mapW) ~= "number" or type(mapH) ~= "number" then return end
-    local w = mapW / 2 + RADIUS_OFFSET
-    local h = mapH / 2 + RADIUS_OFFSET
-    local shape = (type(GetMinimapShape) == "function") and GetMinimapShape() or "ROUND"
-    if not IsSecret(shape) and shape == "SQUARE" then
-        local dw, dh = math.sqrt(2 * w * w) - 10, math.sqrt(2 * h * h) - 10
-        x = math.max(-w, math.min(x * dw, w))
-        y = math.max(-h, math.min(y * dh, h))
-    else
-        x, y = x * w, y * h
+    if not IsSecret(mapW) and not IsSecret(mapH) and type(mapW) == "number" and type(mapH) == "number" then
+        local rad = math.rad(state.angle)
+        local x, y = math.cos(rad), math.sin(rad)
+        local w = mapW / 2 + RADIUS_OFFSET
+        local h = mapH / 2 + RADIUS_OFFSET
+        local shape = (type(GetMinimapShape) == "function") and GetMinimapShape() or "ROUND"
+        if not IsSecret(shape) and shape == "SQUARE" then
+            local dw, dh = math.sqrt(2 * w * w) - 10, math.sqrt(2 * h * h) - 10
+            x = math.max(-w, math.min(x * dw, w))
+            y = math.max(-h, math.min(y * dh, h))
+        else
+            x, y = x * w, y * h
+        end
+        button:ClearAllPoints()
+        button:SetPoint("CENTER", Minimap, "CENTER", x, y)
     end
-    button:ClearAllPoints()
-    button:SetPoint("CENTER", Minimap, "CENTER", x, y)
     button.lpIcon:SetTexture(MinimapTexture())
     if state.hide then button:Hide() else button:Show() end
 end
@@ -832,6 +1016,7 @@ function LP:RegisterAddon(id, info)
     if info.status ~= nil and type(info.status) ~= "function" then error(MAJOR .. ": info.status must be a function", 2) end
     if info.migrate ~= nil and type(info.migrate) ~= "function" then error(MAJOR .. ": info.migrate must be a function", 2) end
     if info.addon ~= nil and type(info.addon) ~= "string" then error(MAJOR .. ": info.addon must be a string", 2) end
+    -- info.menu (function or list of entries) is optional; any other type is ignored by CollectMenu
 
     local entry = self.entries[id]
     if not entry then
