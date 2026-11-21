@@ -14,8 +14,8 @@ Target client: WoW Forever (Mainline API). Texts: English and German.
   *Show minimap button* checkbox. Each addon can add its own subpage below it.
 - **Addon compartment**: one entry "Pardona's Addons" (only if the client has `AddonCompartmentFrame`).
 - **One shared minimap button** (Mainline LibDBIcon layout, draggable along the minimap edge).
-  - Left-click: with one registered addon its `onClick`; with several a small menu (one row per addon
-    plus "Pardona settings").
+  - Left-click: with one registered addon without menu entries its `onClick`; otherwise a small menu
+    (one row per addon, its menu entries below it, plus "Pardona settings").
   - Right-click: overview page.
   - Tooltip: "Pardona's Addons" and one line `Name: Status` per addon.
 - **LibDataBroker launcher "Pardona"** – only if `LibDataBroker-1.1` is already loaded by another addon
@@ -91,6 +91,7 @@ local LP = LibStub("LibPardona-1.0")
 | `status` | `function() -> string\|nil` | optional – short status for tooltip and overview |
 | `migrate` | `function(db)` | optional – one-time import of old settings (e.g. an old minimap position) |
 | `addon` | string | optional, **recommended for every addon** – the addon's folder name as in its TOC (e.g. `"PardonasToolTips"`, usually `local ADDON = ...`) |
+| `menu` | `function() -> entries` or list of entries | optional – entries below the addon's row in the Pardona menu, see [Menu entries (MINOR 6)](#menu-entries-minor-6). Any other type is ignored. |
 
 `info.addon` is used for two things:
 
@@ -161,11 +162,112 @@ db.minimap = { hide = false, angle = 225, changed = 0 }
 ## Behaviour
 
 - **One addon installed**: left-click on minimap button, compartment entry or broker launcher calls that
-  addon's `onClick` directly; the settings tree shows "Pardona's Addons" with one subpage.
+  addon's `onClick` directly – unless the addon has menu entries (`info.menu` returns at least one valid
+  entry); then the Pardona menu opens. The settings tree shows "Pardona's Addons" with one subpage.
 - **Several addons**: left-click opens the Pardona menu; right-click always opens the overview.
+- Minimap button, compartment entry and broker launcher share one click handler and always behave the same.
 - **Titan Panel / other LDB displays**: the "Pardona" launcher behaves like the minimap button; its text
   lists the addon statuses. Hide the minimap button via the overview checkbox if you prefer the panel.
 - The Pardona menu and the standalone overview window use the style API's `"panel"` variant (since MINOR 4).
+
+## Menu entries (MINOR 6)
+
+An addon can add its own entries to the shared Pardona menu with `info.menu`. They appear indented
+below the addon's row (icon and name, which still calls `onClick`).
+
+### Entry
+
+```lua
+{
+    text = "Lock frames",                 -- string or function() -> string; required, not empty
+    onClick = function(button) ... end,   -- required
+    checked = function() return db.locked end, -- optional: bool or function; check mark only for exactly true
+    disabled = false,                     -- optional: bool or function; disabled only for exactly true
+    tooltip = "Locks all frames.",        -- optional: string or function() -> string
+}
+```
+
+- `info.menu` is either a **function** that returns the list of entries or the **list** itself.
+- It is evaluated again **every time the menu opens** – nothing is cached, so texts and check marks are
+  always current. Field functions are called the same way.
+- Errors in `info.menu` or in a field function are reported through `geterrorhandler()`; the field then
+  counts as missing (an error in `info.menu` itself means no entries). Secret values count as missing.
+- Entries without a non-empty `text` or without an `onClick` function are skipped. At most 12 entries per
+  addon are shown.
+- Calling `RegisterAddon` again with the same id replaces `info.menu` together with the other fields.
+
+### Display
+
+- Entries are indented, without icon, in `GameFontHighlightSmall`.
+- `checked`: a check mark before the text; unchecked entries keep the same indent.
+- `disabled`: grey text, no highlight, no click; the menu stays open.
+- `tooltip`: shown on mouse-over (right of the entry, wrapped).
+- A click closes the menu first and then calls `onClick(button)`. Errors in `onClick` are reported
+  through `geterrorhandler()`.
+- When at least one addon has entries, the addon groups are separated by a small gap.
+
+### Behaviour
+
+- **One addon** with at least one entry: left-click opens the menu (instead of calling `onClick`).
+  Without entries the addon's `onClick` is still called directly. The tooltip hint follows this
+  ("Left-click: <name> menu" instead of "Left-click: open <name>").
+- **Several addons**: the menu as before, now with the entries of each addon below its row.
+- Minimap button, addon compartment and LibDataBroker launcher behave the same.
+- The menu is a plain frame: entries cannot run secure actions (casting, targeting, protected frames).
+  Combat restrictions are the addon's responsibility – e.g. return `disabled = true` while
+  `InCombatLockdown()` is true, or check it in `onClick`.
+
+### Version check
+
+`LP.MENU_VERSION` is `1` since MINOR 6. Older copies of the library ignore `info.menu`, so passing it is
+always safe; check the version only if your addon needs to know whether the entries are shown:
+
+```lua
+if LP.MENU_VERSION then
+    -- menu entries are available
+end
+```
+
+### Example
+
+```lua
+LP:RegisterAddon("BuffReminder", {
+    name = "Buff Reminder",
+    addon = ADDON,
+    icon = "Interface\\AddOns\\PardonasBuffReminder\\Textures\\Icon",
+    db = BuffReminderDB,
+    onClick = function() LP:OpenSettings("BuffReminder") end,
+    menu = function()
+        return {
+            {
+                text = function() return BuffReminderDB.locked and "Unlock (move)" or "Lock" end,
+                checked = function() return BuffReminderDB.locked == true end,
+                tooltip = "Lock or move the reminder frame.",
+                onClick = function() ToggleLock() end,
+            },
+            {
+                text = "Test",
+                tooltip = "Shows all reminders for a few seconds.",
+                disabled = function() return InCombatLockdown() end,
+                onClick = function() ShowTestReminders() end,
+            },
+        }
+    end,
+})
+```
+
+## Conventions for Pardona addons
+
+- **Key bindings** go into the addon's `Bindings.xml` with `category="Pardona's Addons"` (exactly this
+  text) and the header token `PARDONAS<ADDON>`, e.g. from the Buff Reminder:
+
+  ```xml
+  <Binding name="CLICK PardonasBuffReminderKeyButton:LeftButton" category="Pardona's Addons" header="PARDONASBUFFREMINDER"></Binding>
+  ```
+
+  Define the header text as `BINDING_HEADER_PARDONAS<ADDON>` and, as fallback, also as
+  `BINDING_NAME_HEADER_PARDONAS<ADDON>`.
+- **Visible texts** use only characters from Windows-1252 (e.g. no `→`; write `->` instead).
 
 ## Style API (MINOR 4)
 
@@ -368,7 +470,10 @@ end
 
 ### Test addon
 
-`tools/LibPardonaTest` is an in-game test addon for the style API (English only, not packaged). Install it
+`tools/LibPardonaTest` is an in-game test addon for the style API and the menu entries (English only, not
+packaged). It registers five menu entries: *Demo window* (like `/lptest demo`), *Tooltip style* (like
+`/lptest tip`, checked while the tooltip style is on), *Click counter: N* (dynamic text), *Disabled entry*
+and *Error test* (raises a Lua error on purpose). Install it
 together with the current library checkout:
 
 ```powershell
@@ -399,11 +504,14 @@ permissions for the WoW folder.
 | `/lptest bar` | `StyleStatusBar` on `GameTooltipStatusBar` on/off (no fill). |
 | `/lptest combat` | Thin style on `PlayerFrame` on/off; prints `true` / `queued` / `false`. |
 | `/lptest minimap` | Calls `LP:RefreshMinimapButton()` and prints `GetMinimapShape()`. |
-| `/lptest status` | `LP.minor`, `LP.STYLE_VERSION` and both `IsStyled` values of all test targets. |
+| `/lptest status` | `LP.minor`, `LP.STYLE_VERSION`, `LP.MENU_VERSION` and both `IsStyled` values of all test targets. |
 | `/lptest audit` | Lists every entry of `LP.styleRegistry` with its variant and whether its border frame has a `SetBackdrop` method or a `backdropInfo` field (both expected: no). Ends with `audit ok` or the number of findings. |
+| `/lptest nomenu` | Toggles whether the test addon passes `menu` and registers again with the same id; prints `menu entries on` / `menu entries off`. |
 
 ## Changelog
 
+- **1.2.0 (MINOR 6)**: Per-addon menu entries (`info.menu`, `LP.MENU_VERSION`); one addon with entries
+  opens the menu; minimap button hide/show also applied when the minimap size is secret.
 - **1.1.1 (MINOR 5)**: Style borders without `BackdropTemplate`; fixes the taint error in
   `Backdrop.lua` (arithmetic on a secret frame size, e.g. tooltips). Secret-value guard for the minimap size.
 - **1.1.0 (MINOR 4)**: Style API.
