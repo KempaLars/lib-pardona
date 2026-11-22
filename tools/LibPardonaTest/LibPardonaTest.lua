@@ -58,7 +58,8 @@ local HELP = {
     "/lptest bar - StyleStatusBar on GameTooltipStatusBar on/off",
     "/lptest combat - thin style on PlayerFrame on/off (prints true / queued / false)",
     "/lptest minimap - RefreshMinimapButton and print GetMinimapShape()",
-    "/lptest status - LP.minor, LP.STYLE_VERSION, LP.MENU_VERSION and IsStyled of all test targets",
+    "/lptest status - LP.minor, versions, LP.activeFrom and IsStyled of all test targets",
+    "/lptest diag - LP:GetDiagnostics() field by field (active copy, addons, recorded copies)",
     "/lptest audit - checks every styled frame for a backdrop border (expected: none)",
     "/lptest nomenu - menu entries of the test addon on/off (registers again)",
 }
@@ -304,10 +305,34 @@ local function StatusTargets()
 end
 
 local function CmdStatus()
-    Print("LP.minor:", LP.minor, "LP.STYLE_VERSION:", LP.STYLE_VERSION, "LP.MENU_VERSION:", LP.MENU_VERSION)
+    Print("LP.minor:", LP.minor, "LP.STYLE_VERSION:", LP.STYLE_VERSION, "LP.MENU_VERSION:", LP.MENU_VERSION,
+        "LP.DIAGNOSTICS_VERSION:", LP.DIAGNOSTICS_VERSION, "LP.activeFrom:", LP.activeFrom)
     for _, target in ipairs(StatusTargets()) do
         local variant, queued = LP:IsStyled(target[2])
         Print(target[1] .. ":", variant, queued)
+    end
+end
+
+---------------------------------------------------------------------------
+-- diag
+---------------------------------------------------------------------------
+local function CmdDiag()
+    if type(LP.GetDiagnostics) ~= "function" then
+        Print("LP:GetDiagnostics() is missing (active MINOR " .. tostring(LP.minor) .. ")")
+        return
+    end
+    local diag = LP:GetDiagnostics()
+    Print("minor:", diag.minor, "from:", diag.from)
+    Print("styleVersion:", diag.styleVersion, "menuVersion:", diag.menuVersion,
+        "diagnosticsVersion:", diag.diagnosticsVersion)
+    Print("addons:", #diag.addons)
+    for i, info in ipairs(diag.addons) do
+        Print("  addon " .. i .. ":", "id", info.id, "addon", info.addon, "version", info.version,
+            "libMinor", info.libMinor)
+    end
+    Print("copies:", #diag.copies)
+    for i, copy in ipairs(diag.copies) do
+        Print("  copy " .. i .. ":", "addon", copy.addon, "minor", copy.minor, "registered", copy.registered)
     end
 end
 
@@ -408,6 +433,7 @@ end
 ---------------------------------------------------------------------------
 local COMMANDS = {
     audit = CmdAudit,
+    diag = CmdDiag,
     nomenu = CmdNoMenu,
     demo = CmdDemo,
     char = CmdChar,
