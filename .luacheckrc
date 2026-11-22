@@ -6,6 +6,12 @@ unused_args = false
 -- LibStub is the official, unmodified public-domain file and is not linted
 exclude_files = { "LibStub/", ".release" }
 
+-- /pardona slash command (LibPardona-1.0.lua)
+globals = {
+    "SLASH_PARDONA1",
+    "SlashCmdList",
+}
+
 read_globals = {
     -- namespaces and objects
     "AddonCompartmentFrame",

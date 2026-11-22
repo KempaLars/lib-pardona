@@ -6,13 +6,39 @@
 -- STYLE_FILE_MINOR there equal to MINOR here.
 -- License: MIT
 
+-- Folder name of the embedding addon (first value of the file vararg), nil if unavailable.
+local ADDON_NAME = ...
+if (type(issecretvalue) == "function" and issecretvalue(ADDON_NAME)) or type(ADDON_NAME) ~= "string" or ADDON_NAME == "" then
+    ADDON_NAME = nil
+end
+
 local MAJOR, MINOR = "LibPardona-1.0", 6
 
 assert(LibStub, MAJOR .. " requires LibStub")
 local LP, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)
+
+-- Every loaded copy (MINOR 6 or newer) records itself in the active library, also when it loses.
+do
+    local target = LP or LibStub:GetLibrary(MAJOR, true)
+    if type(target) == "table" then
+        if type(target.copies) ~= "table" then target.copies = {} end
+        local addon = ADDON_NAME or "?"
+        local known = false
+        for _, copy in ipairs(target.copies) do
+            if type(copy) == "table" and copy.addon == addon and copy.minor == MINOR then
+                known = true
+                break
+            end
+        end
+        if not known then table.insert(target.copies, { addon = addon, minor = MINOR }) end
+    end
+end
+
 if not LP then return end
 LP.minor = MINOR
+LP.activeFrom = ADDON_NAME or "?"     -- folder of the active copy
 LP.MENU_VERSION = 1 -- per-addon menu entries (info.menu), since MINOR 6
+LP.DIAGNOSTICS_VERSION = 1 -- suite diagnostics (LP:GetDiagnostics, /pardona), since MINOR 6
 
 ---------------------------------------------------------------------------
 -- Persistent state (kept across upgrades to a newer MINOR)
@@ -45,6 +71,11 @@ local L = {
     HINT_LEFT_MENU = "Left-click: choose addon",
     HINT_RIGHT = "Right-click: overview",
     HINT_DRAG = "Drag: move button",
+    COL_LIB = "Lib",
+    LIB_OLD = "< 6",
+    DIAG_ACTIVE = "Active library: MINOR %s (from %s), style %s, menu %s",
+    DIAG_ADDON = "%s %s – Lib %s",
+    DIAG_OTHER = "Other copies: %s",
 }
 
 local locale = (type(GetLocale) == "function") and GetLocale() or "enUS"
@@ -60,6 +91,10 @@ if locale == "deDE" then
     L.HINT_LEFT_MENU = "Linksklick: Addon wählen"
     L.HINT_RIGHT = "Rechtsklick: Übersicht"
     L.HINT_DRAG = "Ziehen: Button verschieben"
+    L.COL_LIB = "Lib"
+    L.DIAG_ACTIVE = "Lib aktiv: MINOR %s (aus %s), Stil %s, Menü %s"
+    L.DIAG_ADDON = "%s %s – Lib %s"
+    L.DIAG_OTHER = "Weitere Kopien: %s"
 end
 
 ---------------------------------------------------------------------------
@@ -186,6 +221,106 @@ end
 local function CallOnClick(entry, button)
     local ok, err = pcall(entry.info.onClick, button or "LeftButton")
     if not ok then ReportError(err) end
+end
+
+---------------------------------------------------------------------------
+-- Suite diagnostics (MINOR 6)
+---------------------------------------------------------------------------
+local CHAT_PREFIX = "|cffd9ad40Pardona:|r"
+
+-- Valid entries of LP.copies (copies of MINOR <= 5 never record themselves).
+local function KnownCopies()
+    local list = {}
+    if type(LP.copies) ~= "table" then return list end
+    for _, copy in ipairs(LP.copies) do
+        if type(copy) == "table" and type(copy.addon) == "string" and type(copy.minor) == "number" then
+            list[#list + 1] = copy
+        end
+    end
+    return list
+end
+
+local function HighestCopyMinor(copies, addon)
+    if type(addon) ~= "string" then return nil end
+    local best
+    for _, copy in ipairs(copies) do
+        if copy.addon == addon and (not best or copy.minor > best) then best = copy.minor end
+    end
+    return best
+end
+
+local function IsRegisteredFolder(addon)
+    for _, id in ipairs(LP.order) do
+        local entry = LP.entries[id]
+        if entry and entry.addon == addon then return true end
+    end
+    return false
+end
+
+local function BuildDiagnostics()
+    local copies = KnownCopies()
+    local diag = {
+        minor = LP.minor,
+        from = LP.activeFrom or "?",
+        styleVersion = LP.STYLE_VERSION,
+        menuVersion = LP.MENU_VERSION,
+        diagnosticsVersion = LP.DIAGNOSTICS_VERSION,
+        addons = {},
+        copies = {},
+    }
+    for _, id in ipairs(LP.order) do
+        local entry = LP.entries[id]
+        if entry then
+            diag.addons[#diag.addons + 1] = {
+                id = id,
+                name = entry.info.name,
+                addon = entry.addon,
+                version = GetVersion(entry) or "-",
+                libMinor = HighestCopyMinor(copies, entry.addon),
+            }
+        end
+    end
+    for _, copy in ipairs(copies) do
+        diag.copies[#diag.copies + 1] = {
+            addon = copy.addon,
+            minor = copy.minor,
+            registered = IsRegisteredFolder(copy.addon),
+        }
+    end
+    table.sort(diag.copies, function(a, b)
+        if a.addon ~= b.addon then return a.addon < b.addon end
+        return a.minor < b.minor
+    end)
+    return diag
+end
+
+local function LibText(libMinor)
+    return libMinor and tostring(libMinor) or L.LIB_OLD
+end
+
+local function ActiveLine(diag)
+    return L.DIAG_ACTIVE:format(tostring(diag.minor), tostring(diag.from),
+        tostring(diag.styleVersion or "-"), tostring(diag.menuVersion or "-"))
+end
+
+-- nil if every recorded copy belongs to a registered addon.
+local function OtherCopiesLine(diag)
+    local parts = {}
+    for _, copy in ipairs(diag.copies) do
+        if not copy.registered then parts[#parts + 1] = copy.addon .. " (" .. copy.minor .. ")" end
+    end
+    if #parts == 0 then return nil end
+    return L.DIAG_OTHER:format(table.concat(parts, ", "))
+end
+
+local function PrintDiagnostics()
+    local diag = BuildDiagnostics()
+    local lines = { ActiveLine(diag) }
+    for _, info in ipairs(diag.addons) do
+        lines[#lines + 1] = L.DIAG_ADDON:format(tostring(info.name), info.version, LibText(info.libMinor))
+    end
+    lines[#lines + 1] = OtherCopiesLine(diag)
+    for _, line in ipairs(lines) do print(CHAT_PREFIX .. " " .. line) end
 end
 
 ---------------------------------------------------------------------------
@@ -613,45 +748,113 @@ end
 ---------------------------------------------------------------------------
 local OVERVIEW_ROW_HEIGHT = 32
 local OVERVIEW_LIST_TOP = -112
+local OVERVIEW_STANDALONE_WIDTH = 620
+local OVERVIEW_STANDALONE_MIN_HEIGHT = 360
+-- column x offsets (relative to the row) and widths; the status column runs up to the Open button
+local COL_NAME_X, COL_NAME_W = 40, 160
+local COL_VERSION_X, COL_VERSION_W = 205, 80
+local COL_LIB_X, COL_LIB_W = 290, 40
+local COL_STATUS_X = 335
+
+local function CreateColumnText(row, font)
+    local fs = row:CreateFontString(nil, "OVERLAY", font)
+    fs:SetJustifyH("LEFT")
+    fs:SetWordWrap(false)
+    return fs
+end
+
+-- Creates missing row parts (also on rows created by an older copy) and lays out all columns.
+local function SetupOverviewRow(row)
+    if not row.lib then row.lib = CreateColumnText(row, "GameFontHighlightSmall") end
+    row.name:ClearAllPoints()
+    row.name:SetPoint("LEFT", row, "LEFT", COL_NAME_X, 0)
+    row.name:SetWidth(COL_NAME_W)
+    row.version:ClearAllPoints()
+    row.version:SetPoint("LEFT", row, "LEFT", COL_VERSION_X, 0)
+    row.version:SetWidth(COL_VERSION_W)
+    row.lib:ClearAllPoints()
+    row.lib:SetPoint("LEFT", row, "LEFT", COL_LIB_X, 0)
+    row.lib:SetWidth(COL_LIB_W)
+    row.status:ClearAllPoints()
+    row.status:SetPoint("LEFT", row, "LEFT", COL_STATUS_X, 0)
+    row.status:SetPoint("RIGHT", row.open, "LEFT", -8, 0)
+end
+
+local function CreateOverviewRow(content)
+    local row = CreateFrame("Frame", nil, content)
+    row:SetHeight(OVERVIEW_ROW_HEIGHT)
+    row.stripe = row:CreateTexture(nil, "BACKGROUND")
+    row.stripe:SetAllPoints(row)
+    row.stripe:SetColorTexture(1, 1, 1, 0.04)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(24, 24)
+    row.icon:SetPoint("LEFT", row, "LEFT", 8, 0)
+    row.name = CreateColumnText(row, "GameFontHighlight")
+    row.version = CreateColumnText(row, "GameFontHighlightSmall")
+    row.open = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.open:SetSize(90, 22)
+    row.open:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.status = CreateColumnText(row, "GameFontHighlightSmall")
+    return row
+end
+
+-- Parts added in later MINORs (Lib header, footer) are retrofitted onto existing content.
+local function EnsureOverviewParts(content)
+    if not content.lpLibHeader then
+        local header = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        header:SetText(L.COL_LIB)
+        content.lpLibHeader = header
+    end
+    content.lpLibHeader:ClearAllPoints()
+    content.lpLibHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 16 + COL_LIB_X, OVERVIEW_LIST_TOP + 16)
+    if type(content.lpHeaders) == "table" then
+        local function Place(header, x)
+            if header then
+                header:ClearAllPoints()
+                header:SetPoint("TOPLEFT", content, "TOPLEFT", 16 + x, OVERVIEW_LIST_TOP + 16)
+            end
+        end
+        Place(content.lpHeaders.addon, COL_NAME_X)
+        Place(content.lpHeaders.version, COL_VERSION_X)
+        Place(content.lpHeaders.status, COL_STATUS_X)
+    end
+    if not content.lpFooter then
+        local footer = {}
+        for i = 1, 2 do
+            local fs = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            fs:SetJustifyH("LEFT")
+            fs:SetWordWrap(true)
+            footer[i] = fs
+        end
+        content.lpFooter = footer
+    end
+end
+
+local function StringHeight(fs, fallback)
+    local height = fs:GetStringHeight()
+    if IsSecret(height) or type(height) ~= "number" or height <= 0 then return fallback end
+    return height
+end
 
 local function RefreshOverview()
     local frame = LP.frames.overview
     local content = frame and frame.lpContent
     if not content then return end
+    EnsureOverviewParts(content)
+
+    local diag = BuildDiagnostics()
+    local libByIndex = {}
+    for index, info in ipairs(diag.addons) do libByIndex[index] = info.libMinor end
 
     local y = OVERVIEW_LIST_TOP
     for index, id in ipairs(LP.order) do
         local entry = LP.entries[id]
         local row = content.lpRows[index]
         if not row then
-            row = CreateFrame("Frame", nil, content)
-            row:SetHeight(OVERVIEW_ROW_HEIGHT)
-            row.stripe = row:CreateTexture(nil, "BACKGROUND")
-            row.stripe:SetAllPoints(row)
-            row.stripe:SetColorTexture(1, 1, 1, 0.04)
-            row.icon = row:CreateTexture(nil, "ARTWORK")
-            row.icon:SetSize(24, 24)
-            row.icon:SetPoint("LEFT", row, "LEFT", 8, 0)
-            row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            row.name:SetPoint("LEFT", row, "LEFT", 40, 0)
-            row.name:SetWidth(170)
-            row.name:SetJustifyH("LEFT")
-            row.name:SetWordWrap(false)
-            row.version = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            row.version:SetPoint("LEFT", row, "LEFT", 215, 0)
-            row.version:SetWidth(90)
-            row.version:SetJustifyH("LEFT")
-            row.version:SetWordWrap(false)
-            row.open = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            row.open:SetSize(90, 22)
-            row.open:SetPoint("RIGHT", row, "RIGHT", -8, 0)
-            row.status = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            row.status:SetPoint("LEFT", row, "LEFT", 315, 0)
-            row.status:SetPoint("RIGHT", row.open, "LEFT", -8, 0)
-            row.status:SetJustifyH("LEFT")
-            row.status:SetWordWrap(false)
+            row = CreateOverviewRow(content)
             content.lpRows[index] = row
         end
+        SetupOverviewRow(row)
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", content, "TOPLEFT", 16, y)
         row:SetPoint("TOPRIGHT", content, "TOPRIGHT", -16, y)
@@ -659,6 +862,7 @@ local function RefreshOverview()
         row.icon:SetTexture(entry.info.icon)
         row.name:SetText(entry.info.name)
         row.version:SetText(GetVersion(entry) or "-")
+        row.lib:SetText(LibText(libByIndex[index]))
         row.status:SetText(GetStatus(entry) or "")
         row.open:SetText(L.OPEN)
         row.open:SetScript("OnClick", function() CallOnClick(entry, "LeftButton") end)
@@ -677,6 +881,31 @@ local function RefreshOverview()
     check:SetPoint("TOPLEFT", content, "TOPLEFT", 16, y - 12)
     check:SetChecked(not MinimapState().hide)
     if LP.frames.minimap then check:Enable() else check:Disable() end
+    y = y - 12 - 26 - 8
+
+    -- footer: active copy and, if any, copies of addons that are not registered
+    local style = LP.Style
+    local hint = type(style) == "table" and type(style.colors) == "table" and style.colors.hint
+    local texts = { ActiveLine(diag), OtherCopiesLine(diag) }
+    for i, fs in ipairs(content.lpFooter) do
+        fs:ClearAllPoints()
+        fs:SetPoint("TOPLEFT", content, "TOPLEFT", 16, y)
+        fs:SetPoint("TOPRIGHT", content, "TOPRIGHT", -16, y)
+        if type(hint) == "table" then fs:SetTextColor(hint[1], hint[2], hint[3], hint[4] or 1) end
+        if texts[i] then
+            fs:SetText(texts[i])
+            fs:Show()
+            y = y - StringHeight(fs, 12) - 2
+        else
+            fs:SetText("")
+            fs:Hide()
+        end
+    end
+
+    -- the standalone window grows with its content (own frame, the size is never a secret value)
+    if frame.lpStandalone then
+        frame:SetSize(OVERVIEW_STANDALONE_WIDTH, math.max(OVERVIEW_STANDALONE_MIN_HEIGHT, 16 - y))
+    end
 
     content.lpEmblem:SetTexture(EmblemTexture())
 end
@@ -700,14 +929,17 @@ local function BuildOverviewContent(frame)
     desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
     desc:SetText(L.DESC)
 
-    local function Header(text, x)
+    -- positioned by EnsureOverviewParts (together with the Lib header and the footer)
+    local function Header(text)
         local header = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        header:SetPoint("TOPLEFT", content, "TOPLEFT", 16 + x, OVERVIEW_LIST_TOP + 16)
         header:SetText(text)
+        return header
     end
-    Header(L.COL_ADDON, 40)
-    Header(L.COL_VERSION, 215)
-    Header(L.COL_STATUS, 315)
+    content.lpHeaders = {
+        addon = Header(L.COL_ADDON),
+        version = Header(L.COL_VERSION),
+        status = Header(L.COL_STATUS),
+    }
 
     local empty = content:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     empty:SetPoint("TOPLEFT", content, "TOPLEFT", 24, OVERVIEW_LIST_TOP - 4)
@@ -723,6 +955,7 @@ local function BuildOverviewContent(frame)
         LP:SetMinimapHidden(not self:GetChecked())
     end)
     content.lpMinimapCheck = check
+    EnsureOverviewParts(content)
 end
 
 local function EnsureOverview()
@@ -750,7 +983,7 @@ local function ToggleStandaloneOverview()
     if not frame.lpStandalone then
         frame.lpStandalone = true
         frame:SetParent(UIParent)
-        frame:SetSize(620, 360)
+        frame:SetSize(OVERVIEW_STANDALONE_WIDTH, OVERVIEW_STANDALONE_MIN_HEIGHT)
         frame:SetPoint("CENTER", UIParent, "CENTER")
         frame:SetFrameStrata("DIALOG")
         frame:SetClampedToScreen(true)
@@ -1099,6 +1332,22 @@ function LP:RefreshMinimapButton()
     UpdateMinimapButton()
 end
 
+-- New table on every call: active copy, registered addons with their library MINOR, recorded copies.
+function LP:GetDiagnostics()
+    return BuildDiagnostics()
+end
+
+-- /pardona: diagnostics in the chat; "/pardona show" opens the overview.
+function LP:_Slash(msg)
+    local command = ""
+    if not IsSecret(msg) and type(msg) == "string" then command = msg:match("^%s*(.-)%s*$"):lower() end
+    if command == "show" then
+        self:OpenSettings()
+    else
+        PrintDiagnostics()
+    end
+end
+
 -- Applies the panel style to the library's own windows (menu, standalone overview).
 function LP:_StyleOwnFrames()
     local menu = self.frames.menu
@@ -1159,6 +1408,12 @@ if not LP.loggedIn then
     else
         SafeRegisterEvent(events, "PLAYER_LOGIN")
     end
+end
+
+-- Set again by every winning copy; the handler dispatches through LP, so it always runs the newest MINOR.
+if type(SlashCmdList) == "table" then
+    SLASH_PARDONA1 = "/pardona"
+    SlashCmdList.PARDONA = function(msg) LP:_Slash(msg) end
 end
 
 -- A newer MINOR takes over frames created by an older copy.
