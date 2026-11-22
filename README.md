@@ -10,8 +10,10 @@ Target client: WoW Forever (Mainline API). Texts: English and German.
 ## What it provides
 
 - **Settings category "Pardona's Addons"** (registered once). Its overview page shows the Pardona emblem,
-  every registered addon (icon, name, version from the TOC, short status, *Open* button) and a
-  *Show minimap button* checkbox. Each addon can add its own subpage below it.
+  every registered addon (icon, name, version from the TOC, library MINOR, short status, *Open* button),
+  a *Show minimap button* checkbox and a diagnostics footer. Each addon can add its own subpage below it.
+- **Suite diagnostics** (MINOR 6): `/pardona` and `LP:GetDiagnostics()` – see
+  [Diagnostics (MINOR 6)](#diagnostics-minor-6).
 - **Addon compartment**: one entry "Pardona's Addons" (only if the client has `AddonCompartmentFrame`).
 - **One shared minimap button** (Mainline LibDBIcon layout, draggable along the minimap edge).
   - Left-click: with one registered addon without menu entries its `onClick`; otherwise a small menu
@@ -256,6 +258,89 @@ LP:RegisterAddon("BuffReminder", {
 })
 ```
 
+## Diagnostics (MINOR 6)
+
+Shows at a glance which library copy is active, which Pardona addons are loaded with which library
+MINOR, and which other copies are loaded (e.g. the test addon).
+
+### What is recorded
+
+- Every copy of `LibPardona-1.0.lua` reads the folder name of its embedding addon from the file vararg
+  (`local ADDON_NAME = ...`, first value; `"?"` if it is not a non-empty string).
+- Right after `LibStub:NewLibrary`, **every** copy records itself as `{ addon, minor }` in `LP.copies` of
+  the active library – also copies that do not win. The same `addon`/`minor` pair is recorded only once.
+- The winning copy sets `LP.activeFrom` to its folder name.
+- Copies with **MINOR ≤ 5** do not know this mechanism and never record themselves; addons that ship
+  such a copy are shown with `Lib < 6`.
+- The library MINOR of a registered addon is matched via `info.addon`; an addon without `info.addon`
+  is always shown as `< 6`.
+
+### Chat command
+
+- `/pardona` – prints the diagnostics in the chat:
+
+  ```
+  Pardona: Active library: MINOR 6 (from LibPardonaTest), style 1, menu 1
+  Pardona: Buff Reminder 1.3.0 – Lib 6
+  Pardona: ToolTips dev – Lib < 6
+  Pardona: Other copies: LibPardonaTest (6)
+  ```
+
+  One line per registered addon (name, version as in the overview, library MINOR). The last line only
+  appears if copies of addons that are not registered are loaded. A missing `STYLE_VERSION` or
+  `MENU_VERSION` is shown as `-`. German clients: `Lib aktiv: MINOR 6 (aus …), Stil 1, Menü 1` and
+  `Weitere Kopien: …`.
+- `/pardona show` – opens the overview (case does not matter).
+
+The slash command is set again by every winning copy and dispatches through `LP`, so it always runs the
+code of the newest MINOR.
+
+### Overview
+
+The addon table of "Pardona's Addons" has a **Lib** column (library MINOR or `< 6`). Below the
+*Show minimap button* checkbox a footer (`GameFontDisableSmall`, colour `LP.Style.colors.hint`) shows the
+first chat line and, if there are any, the other copies. Column and footer are updated on every refresh,
+also in the standalone window without Settings API (which grows with its content). Overview frames
+created by an older MINOR are rebuilt or get the missing parts retrofitted.
+
+### `LP:GetDiagnostics()`
+
+Returns a new table on every call:
+
+```lua
+{
+    minor = 6,                      -- LP.minor of the active copy
+    from = "LibPardonaTest",        -- folder of the active copy, or "?"
+    styleVersion = 1, menuVersion = 1, diagnosticsVersion = 1,
+    addons = {                      -- in registration order
+        { id = "BuffReminder", name = "Buff Reminder", addon = "PardonasBuffReminder",
+          version = "1.3.0",        -- as in the overview, also "dev" or "-"
+          libMinor = 6 },           -- highest recorded MINOR of info.addon, nil if unknown (< 6)
+    },
+    copies = {                      -- all recorded copies, sorted by addon
+        { addon = "LibPardonaTest", minor = 6, registered = true },
+    },
+}
+```
+
+`registered` is `true` if a registered addon passes this folder as `info.addon`.
+
+Example – debug output of an addon (older copies have no `GetDiagnostics`):
+
+```lua
+if LP.GetDiagnostics then
+    local diag = LP:GetDiagnostics()
+    print("LibPardona MINOR " .. diag.minor .. " from " .. diag.from)
+    for _, info in ipairs(diag.addons) do
+        print(info.name, info.version, info.libMinor or "< 6")
+    end
+end
+```
+
+### Version check
+
+`LP.DIAGNOSTICS_VERSION` is `1` since MINOR 6.
+
 ## Conventions for Pardona addons
 
 - **Key bindings** go into the addon's `Bindings.xml` with `category="Pardona's Addons"` (exactly this
@@ -470,7 +555,7 @@ end
 
 ### Test addon
 
-`tools/LibPardonaTest` is an in-game test addon for the style API and the menu entries (English only, not
+`tools/LibPardonaTest` is an in-game test addon for the style API, the menu entries and the diagnostics (English only, not
 packaged). It registers five menu entries: *Demo window* (like `/lptest demo`), *Tooltip style* (like
 `/lptest tip`, checked while the tooltip style is on), *Click counter: N* (dynamic text), *Disabled entry*
 and *Error test* (raises a Lua error on purpose). Install it
@@ -504,14 +589,17 @@ permissions for the WoW folder.
 | `/lptest bar` | `StyleStatusBar` on `GameTooltipStatusBar` on/off (no fill). |
 | `/lptest combat` | Thin style on `PlayerFrame` on/off; prints `true` / `queued` / `false`. |
 | `/lptest minimap` | Calls `LP:RefreshMinimapButton()` and prints `GetMinimapShape()`. |
-| `/lptest status` | `LP.minor`, `LP.STYLE_VERSION`, `LP.MENU_VERSION` and both `IsStyled` values of all test targets. |
+| `/lptest status` | `LP.minor`, `LP.STYLE_VERSION`, `LP.MENU_VERSION`, `LP.DIAGNOSTICS_VERSION`, `LP.activeFrom` and both `IsStyled` values of all test targets. |
+| `/lptest diag` | Prints `LP:GetDiagnostics()` field by field: `minor`, `from`, the three versions, `id`/`addon`/`version`/`libMinor` of every addon and `addon`/`minor`/`registered` of every recorded copy. Shows the folder names read from the file vararg. |
 | `/lptest audit` | Lists every entry of `LP.styleRegistry` with its variant and whether its border frame has a `SetBackdrop` method or a `backdropInfo` field (both expected: no). Ends with `audit ok` or the number of findings. |
 | `/lptest nomenu` | Toggles whether the test addon passes `menu` and registers again with the same id; prints `menu entries on` / `menu entries off`. |
 
 ## Changelog
 
 - **1.2.0 (MINOR 6)**: Per-addon menu entries (`info.menu`, `LP.MENU_VERSION`); one addon with entries
-  opens the menu; minimap button hide/show also applied when the minimap size is secret.
+  opens the menu; minimap button hide/show also applied when the minimap size is secret. Suite
+  diagnostics: every copy records its embedding addon, `/pardona` chat output, *Lib* column and footer
+  in the overview, `LP:GetDiagnostics()`, `LP.DIAGNOSTICS_VERSION`.
 - **1.1.1 (MINOR 5)**: Style borders without `BackdropTemplate`; fixes the taint error in
   `Backdrop.lua` (arithmetic on a secret frame size, e.g. tooltips). Secret-value guard for the minimap size.
 - **1.1.0 (MINOR 4)**: Style API.
