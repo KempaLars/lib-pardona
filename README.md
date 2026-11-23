@@ -35,7 +35,7 @@ entry remain, and the overview opens as a small standalone window.
 ```yaml
 externals:
   Libs/lib-pardona:
-    url: https://github.com/KempaLars/lib-pardona
+    url: https://github.com/Pardonas-addons/lib-pardona
 ```
 
 TOC (before the addon's own files):
